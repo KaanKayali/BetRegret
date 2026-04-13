@@ -1,18 +1,15 @@
 import asyncio
 from langchain_core.tools.base import BaseTool
 from langchain_openai import ChatOpenAI
-from langchain.messages import HumanMessage, AIMessage
+from langchain.messages import HumanMessage
 from langchain.agents import create_agent
 from langchain_mcp_adapters.client import MultiServerMCPClient
 import os
 from dotenv import load_dotenv
 
 
-
-
 async def main() -> None:
     load_dotenv()
-
     
     openai_api_key: str = os.getenv("OPENAI_API_KEY")
     rapid_api_key_football = os.getenv("RAPID_API_KEY_FOOTBALL")
