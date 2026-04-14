@@ -12,6 +12,10 @@ dependencies = [
     "langchain-mcp-adapters>=0.2.2",
     "langchain-openai>=1.1.12",
     "python-dotenv>=1.2.2",
+    "langgraph",
+    "mcp[cli]",
+    "pandas",
+    "pydantic",
 ]
 
 [project.scripts]

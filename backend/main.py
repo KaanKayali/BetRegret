@@ -1,4 +1,5 @@
 import asyncio
+import sys
 from langchain_core.tools.base import BaseTool
 from langchain_openai import ChatOpenAI
 from langchain.messages import HumanMessage
@@ -20,7 +21,7 @@ async def main() -> None:
     client: MultiServerMCPClient = MultiServerMCPClient({
         "soccer_server": {
             "transport": "stdio",
-            "command": "python",
+            "command": sys.executable,
             "args": [
                 "./soccer-mcp-server/soccer_server.py"
             ],
@@ -48,7 +49,7 @@ async def main() -> None:
 
 
     answer = await llm_agent.ainvoke({
-        "messages": [HumanMessage(content="What are the upcoming champions league fixtures and if the soccer_server returns 403 forbidden tell me the error why it is not working")]
+        "messages": [HumanMessage(content="What are the Champions League fixtures for season 2024?")]
     })
     print(answer["messages"][-1].content)
 
