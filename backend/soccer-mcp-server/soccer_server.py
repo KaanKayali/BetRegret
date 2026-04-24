@@ -7,6 +7,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
 import pandas as pd
 import os
+import re
 import requests
 
 
@@ -16,7 +17,7 @@ print(f"Current working directory: {os.getcwd()}", file=sys.stderr)
 
 # Handle SIGINT (Ctrl+C) gracefully
 def signal_handler(sig, frame):
-    print("Shutting down server gracefully...")
+    print("Shutting down server gracefully...", file=sys.stderr)
     sys.exit(0)
 
 signal.signal(signal.SIGINT, signal_handler)
@@ -27,6 +28,105 @@ mcp = FastMCP(
     # host="127.0.0.1",
     # port=5000,
 )
+
+
+def _normalize_team_name(team_name: str) -> str:
+    return team_name.strip().lower()
+
+
+def _normalize_team_string(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    normalized = value.strip().lower()
+    normalized = re.sub(r"[^a-z0-9 ]+", "", normalized)
+    normalized = re.sub(r"\b(fc|afc|cf|ac|a\.c\.)\b", "", normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _team_matches_query(team: Dict[str, Any], query: str) -> bool:
+    name = _normalize_team_string(team.get("name"))
+    short_name = _normalize_team_string(team.get("shortName"))
+    tla = _normalize_team_string(team.get("tla"))
+    return query == name or query == short_name or query == tla
+
+
+def _team_contains_query(team: Dict[str, Any], query: str) -> bool:
+    name = _normalize_team_string(team.get("name"))
+    short_name = _normalize_team_string(team.get("shortName"))
+    tla = _normalize_team_string(team.get("tla"))
+    return query in name or query in short_name or query == tla
+
+
+def _get_team_search_results(team_name: str, headers: Dict[str, str], base_url: str) -> List[Dict[str, Any]]:
+    query = _normalize_team_name(team_name)
+    if not query:
+        return []
+
+    teams_url = f"{base_url}/teams"
+    results: List[Dict[str, Any]] = []
+    offset = 0
+    page_size = 200
+
+    while True:
+        params = {"limit": page_size, "offset": offset}
+        resp = requests.get(teams_url, headers=headers, params=params, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        page_teams = data.get("teams", [])
+        if not page_teams:
+            break
+
+        for team in page_teams:
+            if _team_contains_query(team, query):
+                results.append(team)
+
+        if len(page_teams) < page_size:
+            break
+        offset += page_size
+        if offset >= 2000:
+            break
+
+    return results
+
+
+def _score_team_match(team: Dict[str, Any], query: str) -> int:
+    name = _normalize_team_string(team.get("name"))
+    short_name = _normalize_team_string(team.get("shortName"))
+    tla = _normalize_team_string(team.get("tla"))
+    score = 0
+
+    if query == tla:
+        score += 200
+    if query == name:
+        score += 100
+    if query == short_name:
+        score += 90
+    if name.startswith(query) or short_name.startswith(query):
+        score += 50
+    if query in name:
+        score += 20
+    if query in short_name:
+        score += 10
+    return score
+
+
+def _find_best_team(team_name: str, headers: Dict[str, str], base_url: str, teams: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
+    query = _normalize_team_name(team_name)
+    if not query:
+        return None
+
+    if teams is None:
+        teams = _get_team_search_results(team_name, headers, base_url)
+    if not teams:
+        return None
+
+    exact_matches = [team for team in teams if _team_matches_query(team, query)]
+    if exact_matches:
+        return exact_matches[0]
+
+    scored = sorted(teams, key=lambda team: _score_team_match(team, query), reverse=True)
+    return scored[0] if scored else None
+
 
 @mcp.tool()
 def get_league_fixtures(league_id: int, season: int) -> Dict[str, Any]:
@@ -46,21 +146,21 @@ def get_league_fixtures(league_id: int, season: int) -> Dict[str, Any]:
         get_league_fixtures(league_id=39, season=2023)
         ```
     """
-    api_key = os.getenv("RAPID_API_KEY_FOOTBALL")
+    api_key = os.getenv("FOOTBALL_DATA_API_KEY")
     if not api_key:
-        return {"error": "RAPID_API_KEY_FOOTBALL environment variable not set."}
+        return {"error": "FOOTBALL_DATA_API_KEY environment variable not set."}
 
-    base_url = "https://v3.football.api-sports.io"
+    base_url = "https://api.football-data.org/v4"
     headers = {
-        "x-apisports-key": api_key
+        "X-Auth-Token": api_key
     }
 
-    fixtures_url = f"{base_url}/fixtures"
-    fixtures_params = {"league": league_id, "season": season}
+    fixtures_url = f"{base_url}/competitions/{league_id}/matches"
+    fixtures_params = {"season": season}
 
     try:
-        response = requests.get(fixtures_url, headers=headers, params=fixtures_params, timeout=30)  # Increased timeout
-        response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
+        response = requests.get(fixtures_url, headers=headers, params=fixtures_params, timeout=30)
+        response.raise_for_status()
         return response.json()
 
     except requests.exceptions.RequestException as e:
@@ -74,7 +174,7 @@ def get_league_id_by_name(league_name: str) -> Dict[str, Any]:
     """Retrieve the league ID for a given league name.
 
     This tool searches for a league by its name and returns its ID.  It uses the
-    `/leagues` endpoint of the API-Football API.
+    `/competitions` endpoint of the football-data.org API.
 
     **Args:**
 
@@ -93,27 +193,27 @@ def get_league_id_by_name(league_name: str) -> Dict[str, Any]:
         # Expected output (may vary):  {"league_id": 39}
         ```
     """
-    api_key = os.getenv("RAPID_API_KEY_FOOTBALL")
+    api_key = os.getenv("FOOTBALL_DATA_API_KEY")
     if not api_key:
-        return {"error": "RAPID_API_KEY_FOOTBALL environment variable not set."}
+        return {"error": "FOOTBALL_DATA_API_KEY environment variable not set."}
 
-    base_url = "https://v3.football.api-sports.io"
+    base_url = "https://api.football-data.org/v4"
     headers = {
-        "x-apisports-key": api_key
+        "X-Auth-Token": api_key
     }
 
     try:
-        leagues_url = f"{base_url}/leagues"
-        leagues_params = {"search": league_name}
-        resp = requests.get(leagues_url, headers=headers, params=leagues_params, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
+        competitions_url = f"{base_url}/competitions"
+        response = requests.get(competitions_url, headers=headers, timeout=15)
+        response.raise_for_status()
+        data = response.json()
 
-        if not data.get("response"):
-            return {"error": f"No leagues found matching '{league_name}'."}
+        # Search for the league by name
+        for competition in data.get("competitions", []):
+            if league_name.lower() in competition["name"].lower():
+                return {"league_id": competition["id"]}
 
-        league_id = data["response"][0]["league"]["id"]
-        return {"league_id": league_id}
+        return {"error": f"No leagues found matching '{league_name}'."}
 
     except Exception as e:
         return {"error": str(e)}
@@ -125,7 +225,7 @@ def get_all_leagues_id(country: Optional[List[str]] = None) -> Dict[str, Any]:
     """Retrieve a list of all football leagues with IDs, optionally filtered by country.
 
     This tool retrieves a list of football leagues and their IDs. It can be filtered
-    by providing a list of country names.  Uses the `/leagues` endpoint.
+    by providing a list of country names.  Uses the `/competitions` endpoint.
 
     **Args:**
 
@@ -154,26 +254,26 @@ def get_all_leagues_id(country: Optional[List[str]] = None) -> Dict[str, Any]:
           # }
           ```
     """
-    api_key = os.getenv("RAPID_API_KEY_FOOTBALL")
+    api_key = os.getenv("FOOTBALL_DATA_API_KEY")
     if not api_key:
-        return {"error": "RAPID_API_KEY_FOOTBALL environment variable not set."}
+        return {"error": "FOOTBALL_DATA_API_KEY environment variable not set."}
 
-    base_url = "https://v3.football.api-sports.io"
+    base_url = "https://api.football-data.org/v4"
     headers = {
-        "x-apisports-key": api_key
+        "X-Auth-Token": api_key
     }
 
     try:
-        leagues_url = f"{base_url}/leagues"
-        response = requests.get(leagues_url, headers=headers, timeout=15)
+        competitions_url = f"{base_url}/competitions"
+        response = requests.get(competitions_url, headers=headers, timeout=15)
         response.raise_for_status()
         data = response.json()
 
         leagues: Dict[str, Dict[str, Any]] = {}
-        for league_info in data.get("response", []):
-            league_name = league_info["league"]["name"]
-            league_id = league_info["league"]["id"]
-            league_country = league_info["country"]["name"]
+        for competition in data.get("competitions", []):
+            league_name = competition["name"]
+            league_id = competition["id"]
+            league_country = competition["area"]["name"]
 
             if country and "all" not in country:
                 if league_country.lower() not in [c.lower() for c in country]:
@@ -220,17 +320,35 @@ def get_standings(league_id: Optional[List[int]], season: List[int], team: Optio
             get_standings(league_id=[39, 140], season=[2022, 2023], team=None)
           ```
     """
-    api_key = os.getenv("RAPID_API_KEY_FOOTBALL")
+    api_key = os.getenv("FOOTBALL_DATA_API_KEY")
     if not api_key:
-        return {"error": "RAPID_API_KEY_FOOTBALL environment variable not set."}
+        return {"error": "FOOTBALL_DATA_API_KEY environment variable not set."}
 
-    base_url = "https://v3.football.api-sports.io"
+    base_url = "https://api.football-data.org/v4"
     headers = {
-        "x-apisports-key": api_key
+        "X-Auth-Token": api_key
     }
 
     results: Dict[int, Dict[int, Any]] = {}
     leagues = league_id if league_id else []
+
+    for league in leagues:
+        results[league] = {}
+        for year in season:
+            url = f"{base_url}/competitions/{league}/standings"
+            params = {"season": year}
+
+            if team is not None:
+                params["team"] = team
+
+            try:
+                response = requests.get(url, headers=headers, params=params, timeout=30)
+                response.raise_for_status()
+                results[league][year] = response.json()
+            except Exception as e:
+                results[league][year] = {"error": str(e)}
+
+    return results
 
     for league in leagues:
         results[league] = {}
@@ -293,17 +411,19 @@ def get_player_id(player_name: str) -> Dict[str, Any]:
          return {"error": "The name must be at least 3 characters long."}
 
 
-    api_key = os.getenv("RAPID_API_KEY_FOOTBALL")
+    api_key = os.getenv("FOOTBALL_DATA_API_KEY")
     if not api_key:
-        return {"error": "RAPID_API_KEY_FOOTBALL environment variable not set."}
+        return {"error": "FOOTBALL_DATA_API_KEY environment variable not set."}
 
-    base_url = "https://v3.football.api-sports.io"
-    url = f"{base_url}/players/profiles"
+    base_url = "https://api.football-data.org/v4"
     headers = {
-        "x-apisports-key": api_key,
+        "X-Auth-Token": api_key,
     }
+    # Note: football-data.org doesn't have a direct player search endpoint
+    # This tool is limited and may not work as expected
+    url = f"{base_url}/persons"
     params = {
-        "search": player_name,
+        "name": player_name,
     }
 
     try:
@@ -311,23 +431,17 @@ def get_player_id(player_name: str) -> Dict[str, Any]:
         response.raise_for_status()
         data = response.json()
 
-        if not data.get("response"):
+        if not data.get("persons"):
             return {"error": f"No players found matching '{player_name}'."}
 
         player_list = []
-        for item in data["response"]:
-            player = item.get("player", {})
+        for person in data["persons"]:
             player_info = {
-                "player_id": player.get("id"),
-                "firstname": player.get("firstname"),
-                "lastname": player.get("lastname"),
-                "age": player.get("age"),
-                "nationality": player.get("nationality"),
-                "birth_date": player.get("birth", {}).get("date"),
-                "birth_place": player.get("birth", {}).get("place"),
-                "birth_country": player.get("birth", {}).get("country"),
-                "height": player.get("height"),
-                "weight": player.get("weight")
+                "player_id": person.get("id"),
+                "firstname": person.get("firstName"),
+                "lastname": person.get("lastName"),
+                "nationality": person.get("nationality"),
+                "dateOfBirth": person.get("dateOfBirth"),
             }
             player_list.append(player_info)
 
@@ -339,389 +453,8 @@ def get_player_id(player_name: str) -> Dict[str, Any]:
         return {"error": f"An unexpected error occurred: {e}"}
 
 
-@mcp.tool()
-def get_player_profile(player_name: str) -> Dict[str, Any]:
-    """Retrieve a single player's profile information by their last name.
-
-    This tool retrieves a player's profile by searching for their last name.  It uses
-    the `/players/profiles` endpoint.
-
-    **Args:**
-
-        player_name (str): The last name of the player to look up. Must be >= 3 characters.
-
-    **Returns:**
-
-        Dict[str, Any]: The raw JSON response from the API, or a dictionary with an "error" key
-        if the request fails.
-
-    **Example:**
-    ```python
-    get_player_profile(player_name = "Messi")
-    ```
-    """
-    if len(player_name.strip()) < 3:
-         return {"error": "The name must be at least 3 characters long."}
-
-    api_key = os.getenv("RAPID_API_KEY_FOOTBALL")
-    if not api_key:
-        return {"error": "RAPID_API_KEY_FOOTBALL environment variable not set."}
 
 
-    base_url = "https://v3.football.api-sports.io"
-    url = f"{base_url}/players/profiles"
-    headers = {
-        "x-apisports-key": api_key
-    }
-
-    params = {
-        "search": player_name,
-        "page": 1  # Fetch only the first page
-    }
-
-    try:
-        response = requests.get(url, headers=headers, params=params, timeout=15)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        return {"error": str(e)}
-
-
-
-@mcp.tool()
-def get_player_statistics(player_id: int, seasons: List[int], league_name: Optional[str] = None) -> Dict[str, Any]:
-    """Retrieve detailed player statistics for given seasons and optional league name.
-
-    This tool retrieves detailed player statistics, including advanced stats, for a
-    specified player ID.  It filters the results by a list of seasons and, optionally,
-    by a league name. It uses the /players endpoint.
-
-    **Args:**
-
-        player_id (int): The ID of the player.
-        seasons (List[int]): A list of seasons to get statistics for (4-digit years,
-            e.g., [2021, 2022] or [2023]).
-        league_name (Optional[str]): The name of the league (e.g., "Premier League").
-            If provided, statistics will be retrieved only for this league.  If the
-            league name cannot be found for a given season, an error will be included
-            in the results for that season.
-
-    **Returns:**
-
-        Dict[str, Any]: A dictionary containing the player statistics or error messages. Key fields:
-
-            *   "player_statistics" (List[Dict[str, Any]]): A list of dictionaries, each
-                representing player statistics for a specific season (and league, if
-                specified).
-            *   "error" (str):  An error message may be present *within* the
-                `player_statistics` list if there was a problem fetching data for a specific
-                season, or at the top level if no statistics at all could be retrieved.
-
-            Each dictionary in "player_statistics" contains detailed statistics, grouped
-            by category ("player", "team", "league", "games", "substitutes", "shots",
-            "goals", "passes", "tackles", "duels", "dribbles", "fouls", "cards", "penalty").
-    """
-    api_key = os.getenv("RAPID_API_KEY_FOOTBALL")
-    if not api_key:
-        return {"error": "RAPID_API_KEY_FOOTBALL environment variable not set."}
-    if isinstance(seasons, int):
-        seasons = [seasons]
-    if league_name is not None and len(league_name.strip()) < 3:
-        return {"error": "League name must be at least 3 characters long."}
-
-    base_url = "https://v3.football.api-sports.io"
-    url = f"{base_url}/players"
-    headers = {
-        "x-apisports-key": api_key,
-    }
-    all_stats = []
-
-    def _get_league_id(league_name: str, season: int) -> Optional[int]:
-        """Helper function to get the league ID from the league name."""
-        url = f"{base_url}/leagues"
-        headers = {
-            "x-apisports-key": api_key,
-        }
-        params = {"name": league_name, "season": season}
-        try:
-            response = requests.get(url, headers=headers, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-
-            if not data.get("response"):
-                return None
-
-            for league_data in data["response"]:
-                if league_data["league"]["name"].lower() == league_name.lower():
-                    for league_season in league_data["seasons"]:
-                        if league_season["year"] == season:
-                            return league_data["league"]["id"]
-            return None
-
-        except requests.exceptions.RequestException:
-            return None
-        except Exception:
-            return None
-    # End of helper function
-
-    for current_season in seasons:
-        league_id = None
-        if league_name:
-            league_id = _get_league_id(league_name, current_season)
-            if league_id is None:
-                all_stats.append({
-                    "error": f"Could not find league ID for '{league_name}' in season {current_season}."
-                })
-                continue
-
-        params: Dict[str, Any] = {"id": player_id, "season": current_season}
-        if league_id:
-            params["league"] = league_id
-
-        try:
-            response = requests.get(url, headers=headers, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-
-            if not data.get("response"):
-                continue
-
-            for entry in data["response"]:
-                player_info = entry.get("player", {})
-                for stats in entry.get("statistics", []):
-                    extracted_stats: Dict[str, Any] = {
-                        "player": {
-                            "id": player_info.get("id"),
-                            "name": player_info.get("name"),
-                            "photo": player_info.get("photo"),
-                        },
-                        "team": {
-                            "id": stats.get("team", {}).get("id"),
-                            "name": stats.get("team", {}).get("name"),
-                            "logo": stats.get("team", {}).get("logo"),
-                        },
-                        "league": {
-                            "id": stats.get("league", {}).get("id"),
-                            "name": stats.get("league", {}).get("name"),
-                            "season": stats.get("league", {}).get("season"),
-                            "country": stats.get("league", {}).get("country"),
-                            "flag": stats.get("league", {}).get("flag"),
-                        },
-                        "games": {
-                            "appearances": stats.get("games", {}).get("appearences"),
-                            "lineups": stats.get("games", {}).get("lineups"),
-                            "minutes": stats.get("games", {}).get("minutes"),
-                            "position": stats.get("games", {}).get("position"),
-                            "rating": stats.get("games", {}).get("rating"),
-                        },
-                        "substitutes": {
-                            "in": stats.get("substitutes", {}).get("in"),
-                            "out": stats.get("substitutes", {}).get("out"),
-                            "bench": stats.get("substitutes", {}).get("bench"),
-                        },
-                        "shots": {
-                            "total": stats.get("shots", {}).get("total"),
-                            "on": stats.get("shots", {}).get("on"),
-                        },
-                        "goals": {
-                            "total": stats.get("goals", {}).get("total"),
-                            "conceded": stats.get("goals", {}).get("conceded"),
-                            "assists": stats.get("goals", {}).get("assists"),
-                            "saves": stats.get("goals", {}).get("saves"),
-                        },
-                        "passes": {
-                            "total": stats.get("passes", {}).get("total"),
-                            "key": stats.get("passes", {}).get("key"),
-                            "accuracy": stats.get("passes", {}).get("accuracy"),
-                        },
-                        "tackles": {
-                            "total": stats.get("tackles", {}).get("total"),
-                            "blocks": stats.get("tackles", {}).get("blocks"),
-                            "interceptions": stats.get("tackles", {}).get("interceptions"),
-                        },
-                        "duels": {
-                            "total": stats.get("duels", {}).get("total"),
-                            "won": stats.get("duels", {}).get("won"),
-                        },
-                        "dribbles": {
-                            "attempts": stats.get("dribbles", {}).get("attempts"),
-                            "success": stats.get("dribbles", {}).get("success"),
-                        },
-                        "fouls": {
-                            "drawn": stats.get("fouls", {}).get("drawn"),
-                            "committed": stats.get("fouls", {}).get("committed"),
-                        },
-                        "cards": {
-                            "yellow": stats.get("cards", {}).get("yellow"),
-                            "red": stats.get("cards", {}).get("red"),
-                        },
-                        "penalty": {
-                            "won": stats.get("penalty", {}).get("won"),
-                            "committed": stats.get("penalty", {}).get("committed"),
-                            "scored": stats.get("penalty", {}).get("scored"),
-                            "missed": stats.get("penalty", {}).get("missed"),
-                            "saved": stats.get("penalty", {}).get("saved"),
-                        },
-                    }
-                    all_stats.append(extracted_stats)
-
-        except requests.exceptions.RequestException as e:
-            all_stats.append({"error": f"Request failed for season {current_season}: {e}"})
-        except Exception as e:
-            all_stats.append({"error": f"An unexpected error occurred for season {current_season}: {e}"})
-
-    if not all_stats:
-        return {
-            "error": f"No statistics found for player ID {player_id} for the specified seasons/league."
-        }
-
-    return {"player_statistics": all_stats}
-
-
-@mcp.tool()
-def get_player_statistics_2(player_id: int, seasons: List[int], league_id: Optional[int] = None) -> Dict[str, Any]:
-    """Retrieve detailed player statistics for given seasons and optional league ID.
-
-    This tool retrieves detailed player statistics, including advanced stats, for a
-    specified player ID. It filters the results by a list of seasons and, optionally,
-    by a league ID. It uses the /players endpoint.
-
-    **Args:**
-
-        player_id (int): The ID of the player.
-        seasons (List[int]): A list of seasons to get statistics for (4-digit years,
-            e.g., [2021, 2022] or [2023]).
-        league_id (Optional[int]): The ID of the league.
-
-    **Returns:**
-        Dict[str, Any]: A dictionary containing the player statistics or error messages.  Key fields:
-
-            * "player_statistics" (List[Dict[str, Any]]):  A list of dictionaries where each
-              dictionary contains statistics for a single season.
-            * "error" (str): An error is returned if the API key is missing, a season
-              is invalid, or if no statistics are found.
-
-            Each dictionary in "player_statistics" contains detailed statistics, grouped
-            by category ("player", "team", "league", "games", "substitutes", "shots",
-            "goals", "passes", "tackles", "duels", "dribbles", "fouls", "cards", "penalty").
-    """
-    api_key = os.getenv("RAPID_API_KEY_FOOTBALL")
-    if not api_key:
-        return {"error": "RAPID_API_KEY_FOOTBALL environment variable not set."}
-
-    if isinstance(seasons, int):
-        seasons = [seasons]
-
-    base_url = "https://v3.football.api-sports.io"
-    url = f"{base_url}/players"
-    headers = {
-        "x-apisports-key": api_key,
-    }
-    all_stats = []
-
-    for current_season in seasons:
-        params: Dict[str, Any] = {"id": player_id, "season": current_season}
-        if league_id:
-            params["league"] = league_id
-
-        try:
-            response = requests.get(url, headers=headers, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-
-            if not data.get("response"):
-                continue
-
-            for entry in data["response"]:
-                player_info = entry.get("player", {})
-                for stats in entry.get("statistics", []):
-                    extracted_stats: Dict[str, Any] = {
-                        "player": {
-                            "id": player_info.get("id"),
-                            "name": player_info.get("name"),
-                            "photo": player_info.get("photo"),
-                        },
-                        "team": {
-                            "id": stats.get("team", {}).get("id"),
-                            "name": stats.get("team", {}).get("name"),
-                            "logo": stats.get("team", {}).get("logo"),
-                        },
-                        "league": {
-                            "id": stats.get("league", {}).get("id"),
-                            "name": stats.get("league", {}).get("name"),
-                            "season": stats.get("league", {}).get("season"),
-                            "country": stats.get("league", {}).get("country"),
-                            "flag": stats.get("league", {}).get("flag"),
-                        },
-                        "games": {
-                            "appearances": stats.get("games", {}).get("appearences"),
-                            "lineups": stats.get("games", {}).get("lineups"),
-                            "minutes": stats.get("games", {}).get("minutes"),
-                            "position": stats.get("games", {}).get("position"),
-                            "rating": stats.get("games", {}).get("rating"),
-                        },
-                        "substitutes": {
-                            "in": stats.get("substitutes", {}).get("in"),
-                            "out": stats.get("substitutes", {}).get("out"),
-                            "bench": stats.get("substitutes", {}).get("bench"),
-                        },
-                        "shots": {
-                            "total": stats.get("shots", {}).get("total"),
-                            "on": stats.get("shots", {}).get("on"),
-                        },
-                        "goals": {
-                            "total": stats.get("goals", {}).get("total"),
-                            "conceded": stats.get("goals", {}).get("conceded"),
-                            "assists": stats.get("goals", {}).get("assists"),
-                            "saves": stats.get("goals", {}).get("saves"),
-                        },
-                        "passes": {
-                            "total": stats.get("passes", {}).get("total"),
-                            "key": stats.get("passes", {}).get("key"),
-                            "accuracy": stats.get("passes", {}).get("accuracy"),
-                        },
-                        "tackles": {
-                            "total": stats.get("tackles", {}).get("total"),
-                            "blocks": stats.get("tackles", {}).get("blocks"),
-                            "interceptions": stats.get("tackles", {}).get("interceptions"),
-                        },
-                        "duels": {
-                            "total": stats.get("duels", {}).get("total"),
-                            "won": stats.get("duels", {}).get("won"),
-                        },
-                        "dribbles": {
-                            "attempts": stats.get("dribbles", {}).get("attempts"),
-                            "success": stats.get("dribbles", {}).get("success"),
-                        },
-                        "fouls": {
-                            "drawn": stats.get("fouls", {}).get("drawn"),
-                            "committed": stats.get("fouls", {}).get("committed"),
-                        },
-                        "cards": {
-                            "yellow": stats.get("cards", {}).get("yellow"),
-                            "red": stats.get("cards", {}).get("red"),
-                        },
-                        "penalty": {
-                            "won": stats.get("penalty", {}).get("won"),
-                            "committed": stats.get("penalty", {}).get("committed"),
-                            "scored": stats.get("penalty", {}).get("scored"),
-                            "missed": stats.get("penalty", {}).get("missed"),
-                            "saved": stats.get("penalty", {}).get("saved"),
-                        },
-                    }
-                    all_stats.append(extracted_stats)
-        except requests.exceptions.RequestException as e:
-            return {"error": f"Request failed for season {current_season}: {e}"}
-        except Exception as e:
-            return {"error": f"An unexpected error occurred for season {current_season}: {e}"}
-
-
-    if not all_stats:
-        return {
-            "error": f"No statistics found for player ID {player_id} for the specified seasons/league."
-        }
-
-    return {"player_statistics": all_stats}
 
 
 @mcp.tool()
@@ -748,43 +481,32 @@ def get_team_fixtures(team_name: str, type: str = "upcoming", limit: int = 5) ->
         get_team_fixtures(team_name="Manchester United", type="past", limit=3)
         ```
     """
-    api_key = os.getenv("RAPID_API_KEY_FOOTBALL")
+    api_key = os.getenv("FOOTBALL_DATA_API_KEY")
     if not api_key:
-        return {"error": "RAPID_API_KEY_FOOTBALL environment variable not set."}
+        return {"error": "FOOTBALL_DATA_API_KEY environment variable not set."}
     if len(team_name.strip()) < 3:
-         return {"error": "The team name must be at least 3 characters long."}
+        return {"error": "The team name must be at least 3 characters long."}
 
-    base_url = "https://v3.football.api-sports.io"
+    base_url = "https://api.football-data.org/v4"
     headers = {
-        "x-apisports-key": api_key
+        "X-Auth-Token": api_key
     }
 
-    # Step 1: Find the Team ID
-    search_url = f"{base_url}/teams"
-    search_params = {"search": team_name}
-
     try:
-        search_resp = requests.get(search_url, headers=headers, params=search_params, timeout=15)
-        search_resp.raise_for_status()
-        teams_data = search_resp.json()
-
-        if not teams_data.get("response"):
+        team = _find_best_team(team_name, headers, base_url)
+        if not team:
             return {"error": f"No teams found matching '{team_name}'."}
 
-        # Just pick the first matching team for simplicity
-        first_team = teams_data["response"][0]
-        team_id = first_team["team"]["id"]
-
-        # Step 2: Fetch fixtures
-        fixtures_url = f"{base_url}/fixtures"
-        fixtures_params = {"team": team_id}
+        team_id = team["id"]
+        fixtures_url = f"{base_url}/teams/{team_id}/matches"
+        fixtures_params = {"limit": limit}
 
         if type.lower() == "past":
-            fixtures_params["last"] = limit
+            fixtures_params["status"] = "FINISHED"
         elif type.lower() == "upcoming":
-            fixtures_params["next"] = limit
+            fixtures_params["status"] = "SCHEDULED"
         else:
-             return {"error": "The 'type' parameter must be either 'past' or 'upcoming'."}
+            return {"error": "The 'type' parameter must be either 'past' or 'upcoming'."}
 
         fixtures_resp = requests.get(fixtures_url, headers=headers, params=fixtures_params, timeout=15)
         fixtures_resp.raise_for_status()
@@ -817,19 +539,18 @@ def get_fixture_statistics(fixture_id: int) -> Dict[str, Any]:
     get_fixture_statistics(fixture_id=867946)
     ```
     """
-    api_key = os.getenv("RAPID_API_KEY_FOOTBALL")
+    api_key = os.getenv("FOOTBALL_DATA_API_KEY")
     if not api_key:
-        return {"error": "RAPID_API_KEY_FOOTBALL environment variable not set."}
+        return {"error": "FOOTBALL_DATA_API_KEY environment variable not set."}
 
-    base_url = "https://v3.football.api-sports.io"
-    url = f"{base_url}/fixtures/statistics"
+    base_url = "https://api.football-data.org/v4"
+    url = f"{base_url}/matches/{fixture_id}"
     headers = {
-        "x-apisports-key": api_key
+        "X-Auth-Token": api_key
     }
-    params = {"fixture": fixture_id}
 
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=15)
+        response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
@@ -863,46 +584,37 @@ def get_team_fixtures_by_date_range(team_name: str, from_date: str, to_date: str
         )
         ```
     """
-    api_key = os.getenv("RAPID_API_KEY_FOOTBALL")
+    api_key = os.getenv("FOOTBALL_DATA_API_KEY")
     if not api_key:
-        return {"error": "RAPID_API_KEY_FOOTBALL environment variable not set."}
+        return {"error": "FOOTBALL_DATA_API_KEY environment variable not set."}
     if len(team_name.strip()) < 3:
         return {"error": "The team name must be at least 3 characters long."}
 
-    base_url = "https://v3.football.api-sports.io"
+    base_url = "https://api.football-data.org/v4"
     headers = {
-        "x-apisports-key": api_key
+        "X-Auth-Token": api_key
     }
 
-    # Step 1: find team ID
-    teams_url = f"{base_url}/teams"
-    teams_params = {"search": team_name}
     try:
-        resp = requests.get(teams_url, headers=headers, params=teams_params, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
+        team = _find_best_team(team_name, headers, base_url)
+        if not team:
+            return {"error": f"No teams found matching '{team_name}'."}
 
-        if not data.get("response"):
-            return {"error": f"No team found matching '{team_name}'."}
-        team_id = data["response"][0]["team"]["id"]
-
-        # Step 2: fetch fixtures in date range
-        fixtures_url = f"{base_url}/fixtures"
+        team_id = team["id"]
+        fixtures_url = f"{base_url}/teams/{team_id}/matches"
         fixtures_params = {
-            "team": team_id,
-            "from": from_date,
-            "to": to_date,
-            "season": season
+            "dateFrom": from_date,
+            "dateTo": to_date
         }
-        resp_fixtures = requests.get(fixtures_url, headers=headers, params=fixtures_params, timeout=15)
-        resp_fixtures.raise_for_status()
-        return resp_fixtures.json()
+
+        fixtures_resp = requests.get(fixtures_url, headers=headers, params=fixtures_params, timeout=15)
+        fixtures_resp.raise_for_status()
+        return fixtures_resp.json()
 
     except requests.exceptions.RequestException as e:
         return {"error": f"Request failed: {e}"}
     except Exception as e:
-      return {"error":f"An unexpected error occurred: {e}"}
-  
+        return {"error": f"An unexpected error occurred: {e}"}
 
 @mcp.tool()
 def get_fixture_events(fixture_id: int) -> Dict[str, Any]:
@@ -926,19 +638,18 @@ def get_fixture_events(fixture_id: int) -> Dict[str, Any]:
     get_fixture_events(fixture_id=867946)
     ```
     """
-    api_key = os.getenv("RAPID_API_KEY_FOOTBALL")
+    api_key = os.getenv("FOOTBALL_DATA_API_KEY")
     if not api_key:
-        return {"error": "RAPID_API_KEY_FOOTBALL environment variable not set."}
+        return {"error": "FOOTBALL_DATA_API_KEY environment variable not set."}
 
-    base_url = "https://v3.football.api-sports.io"
-    url = f"{base_url}/fixtures/events"
+    base_url = "https://api.football-data.org/v4"
+    url = f"{base_url}/matches/{fixture_id}"
     headers = {
-        "x-apisports-key": api_key
+        "X-Auth-Token": api_key
     }
-    params = {"fixture": fixture_id}
 
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=15)
+        response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
@@ -946,48 +657,7 @@ def get_fixture_events(fixture_id: int) -> Dict[str, Any]:
     except Exception as e:
         return {"error": f"An unexpected error occurred: {e}"}
 
-@mcp.tool()
-def get_multiple_fixtures_stats(fixture_ids: List[int]) -> Dict[str, Any]:
-    """Retrieves stats (shots, possession, etc.) for multiple fixtures at once.
 
-    **Args:**
-      fixture_ids (List[int]): A list of numeric fixture IDs.
-
-    **Returns:**
-        Dict[str, Any]: A dictionary containing the statistics for each fixture, or error messages. Key fields:
-            * "fixtures_statistics" (List[Dict[str, Any]]): A list of dictionaries, where each
-                dictionary contains the stats for a fixture (keyed by fixture ID) or an error for that fixture.
-
-    **Example:**
-
-        ```python
-        get_multiple_fixtures_stats(fixture_ids=[867946, 867947, 867948])
-        ```
-    """
-    api_key = os.getenv("RAPID_API_KEY_FOOTBALL")
-    if not api_key:
-        return {"error": "RAPID_API_KEY_FOOTBALL environment variable not set."}
-
-    base_url = "https://v3.football.api-sports.io"
-    headers = {
-        "x-apisports-key": api_key
-    }
-    combined_results = []
-
-    for f_id in fixture_ids:
-        try:
-            url = f"{base_url}/fixtures/statistics"
-            params = {"fixture": f_id}
-            resp = requests.get(url, headers=headers, params=params, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-            combined_results.append({f_id: data})
-        except requests.exceptions.RequestException as e:
-            combined_results.append({f_id: {"error": f"Request failed: {e}"}})
-        except Exception as e:
-            combined_results.append({f_id: {"error": f"An unexpected error occurred: {e}"}})
-
-    return {"fixtures_statistics": combined_results}
 
 @mcp.tool()
 def get_league_schedule_by_date(league_name: str, date: List[str], season: str) -> Dict[str, Any]:
@@ -1012,58 +682,53 @@ def get_league_schedule_by_date(league_name: str, date: List[str], season: str) 
     )
     ```
     """
-    api_key = os.getenv("RAPID_API_KEY_FOOTBALL")
+    api_key = os.getenv("FOOTBALL_DATA_API_KEY")
     if not api_key:
-        return {"error": "RAPID_API_KEY_FOOTBALL environment variable not set."}
+        return {"error": "FOOTBALL_DATA_API_KEY environment variable not set."}
     if len(league_name.strip()) < 3:
         return {"error": "The league name must be at least 3 characters long."}
 
-    base_url = "https://v3.football.api-sports.io"
+    base_url = "https://api.football-data.org/v4"
     headers = {
-        "x-apisports-key": api_key
+        "X-Auth-Token": api_key
     }
 
     # Step 1: Get league ID by searching name
     try:
-        leagues_url = f"{base_url}/leagues"
-        leagues_params = {"search": league_name, "season": season}  # Include season in league search
-        resp = requests.get(leagues_url, headers=headers, params=leagues_params, timeout=15)
+        leagues_url = f"{base_url}/competitions"
+        resp = requests.get(leagues_url, headers=headers, timeout=15)
         resp.raise_for_status()
         data = resp.json()
 
-        if not data.get("response"):
-            return {"error": f"No leagues found matching '{league_name}' for season {season}."}
+        if not data.get("competitions"):
+            return {"error": f"No leagues found."}
 
-        # Find the correct league and season
+        # Find the correct league
         league_id = None
-        for league_data in data["response"]:
-             if league_data["league"]["name"].lower() == league_name.lower():
-                for league_season in league_data["seasons"]:
-                    if str(league_season["year"]) == season:
-                        league_id = league_data["league"]["id"]
-                        break
-                if league_id:
-                    break
+        for competition in data["competitions"]:
+             if competition["name"].lower() == league_name.lower():
+                league_id = competition["id"]
+                break
+
         if not league_id:
-            return {"error": f"Could not find {league_name} for season {season}."}
+            return {"error": f"No league found matching '{league_name}'."}
 
+        # Step 2: Fetch fixtures for each date
+        combined_results = {}
+        for d in date:
+            try:
+                fixtures_url = f"{base_url}/competitions/{league_id}/matches"
+                fixtures_params = {"dateFrom": d, "dateTo": d}
+                resp = requests.get(fixtures_url, headers=headers, params=fixtures_params, timeout=15)
+                resp.raise_for_status()
+                data = resp.json()
+                combined_results[d] = data
+            except requests.exceptions.RequestException as e:
+                combined_results[d] = {"error": f"Request failed: {e}"}
+            except Exception as e:
+                combined_results[d] = {"error": f"An unexpected error occurred: {e}"}
 
-        results = {}
-        for match_date in date:
-            # Step 2: Get fixtures for that league & date
-            fixtures_url = f"{base_url}/fixtures"
-            fixtures_params = {
-                "league": league_id,
-                "date": match_date,
-                "season": season
-            }
-
-            resp_fixtures = requests.get(fixtures_url, headers=headers, params=fixtures_params, timeout=15)
-            resp_fixtures.raise_for_status()
-
-            results[match_date] = resp_fixtures.json()  # Store results per date
-
-        return results  # Return structured results with dates as keys
+        return combined_results
 
     except requests.exceptions.RequestException as e:
         return {"error": f"Request failed: {e}"}
@@ -1090,50 +755,38 @@ def get_live_match_for_team(team_name: str) -> Dict[str, Any]:
     get_live_match_for_team(team_name="Chelsea")
     ```
     """
-    api_key = os.getenv("RAPID_API_KEY_FOOTBALL")
+    api_key = os.getenv("FOOTBALL_DATA_API_KEY")
     if not api_key:
-        return {"error": "RAPID_API_KEY_FOOTBALL environment variable not set."}
+        return {"error": "FOOTBALL_DATA_API_KEY environment variable not set."}
     if len(team_name.strip()) < 3:
         return {"error": "The team name must be at least 3 characters long."}
 
-    base_url = "https://v3.football.api-sports.io"
+    base_url = "https://api.football-data.org/v4"
     headers = {
-        "x-apisports-key": api_key
+        "X-Auth-Token": api_key
     }
 
     # Step 1: find team ID
     try:
-        teams_resp = requests.get(
-            f"{base_url}/teams",
-            headers=headers,
-            params={"search": team_name},
-            timeout=15
-        )
-        teams_resp.raise_for_status()
-        teams_data = teams_resp.json()
-
-        if not teams_data.get("response"):
+        team = _find_best_team(team_name, headers, base_url)
+        if not team:
             return {"error": f"No team found matching '{team_name}'."}
+        team_id = team["id"]
 
-        team_id = teams_data["response"][0]["team"]["id"]
-
-        # Step 2: look for live matches
+        # Step 2: check for live matches
         fixtures_resp = requests.get(
-            f"{base_url}/fixtures",
+            f"{base_url}/teams/{team_id}/matches",
             headers=headers,
-            params={"team": team_id, "live": "all"},
+            params={"status": "LIVE"},
             timeout=15
         )
         fixtures_resp.raise_for_status()
         fixtures_data = fixtures_resp.json()
 
-        live_fixtures = fixtures_data.get("response", [])
-
-        if not live_fixtures:
-            return {"message": f"No live match found for '{team_name}' right now."}
-
-        # Typically only 1, but if multiple, just return the first
-        return {"live_fixture": live_fixtures[0]}
+        if fixtures_data.get("matches"):
+            return {"live_fixture": fixtures_data["matches"][0]}
+        else:
+            return {"message": f"No live match found for '{team_name}'."}
 
     except requests.exceptions.RequestException as e:
         return {"error": f"Request failed: {e}"}
@@ -1160,57 +813,39 @@ def get_live_stats_for_team(team_name: str) -> Dict[str, Any]:
     get_live_stats_for_team(team_name="Liverpool")
     ```
     """
-    api_key = os.getenv("RAPID_API_KEY_FOOTBALL")
+    api_key = os.getenv("FOOTBALL_DATA_API_KEY")
     if not api_key:
-        return {"error": "RAPID_API_KEY_FOOTBALL environment variable not set."}
+        return {"error": "FOOTBALL_DATA_API_KEY environment variable not set."}
     if len(team_name.strip()) < 3:
         return {"error": "The team name must be at least 3 characters long."}
 
-    base_url = "https://v3.football.api-sports.io"
+    base_url = "https://api.football-data.org/v4"
     headers = {
-        "x-apisports-key": api_key
+        "X-Auth-Token": api_key
     }
 
     try:
         # Step 1: get team ID
-        teams_resp = requests.get(
-            f"{base_url}/teams",
-            headers=headers,
-            params={"search": team_name},
-            timeout=15
-        )
-        teams_resp.raise_for_status()
-        teams_data = teams_resp.json()
-        if not teams_data.get("response"):
+        team = _find_best_team(team_name, headers, base_url)
+        if not team:
             return {"error": f"No team found matching '{team_name}'."}
-        team_id = teams_data["response"][0]["team"]["id"]
+        team_id = team["id"]
 
         # Step 2: check for live fixtures
         fixtures_resp = requests.get(
-            f"{base_url}/fixtures",
+            f"{base_url}/teams/{team_id}/matches",
             headers=headers,
-            params={"team": team_id, "live": "all"},
+            params={"status": "LIVE"},
             timeout=15
         )
         fixtures_resp.raise_for_status()
         fixtures_data = fixtures_resp.json()
-        live_fixtures = fixtures_data.get("response", [])
-        if not live_fixtures:
-            return {"message": f"No live match for '{team_name}' right now."}
 
-        fixture_id = live_fixtures[0]["fixture"]["id"]
-
-        # Step 3: get stats for that fixture
-        stats_resp = requests.get(
-            f"{base_url}/fixtures/statistics",
-            headers=headers,
-            params={"fixture": fixture_id},
-            timeout=15
-        )
-        stats_resp.raise_for_status()
-        stats_data = stats_resp.json()
-
-        return {"fixture_id": fixture_id, "live_stats": stats_data}
+        if fixtures_data.get("matches"):
+            live_match = fixtures_data["matches"][0]
+            return {"fixture_id": live_match["id"], "live_stats": live_match}
+        else:
+            return {"message": f"No live match found for '{team_name}'."}
 
     except requests.exceptions.RequestException as e:
         return {"error": f"Request failed: {e}"}
@@ -1237,63 +872,44 @@ def get_live_match_timeline(team_name: str) -> Dict[str, Any]:
     get_live_match_timeline(team_name="Manchester City")
     ```
     """
-    api_key = os.getenv("RAPID_API_KEY_FOOTBALL")
+    api_key = os.getenv("FOOTBALL_DATA_API_KEY")
     if not api_key:
-        return {"error": "RAPID_API_KEY_FOOTBALL environment variable not set."}
+        return {"error": "FOOTBALL_DATA_API_KEY environment variable not set."}
     if len(team_name.strip()) < 3:
         return {"error": "The team name must be at least 3 characters long."}
 
-    base_url = "https://v3.football.api-sports.io"
+    base_url = "https://api.football-data.org/v4"
     headers = {
-        "x-apisports-key": api_key
+        "X-Auth-Token": api_key
     }
 
     try:
         # Step 1: team ID
-        teams_resp = requests.get(
-            f"{base_url}/teams",
-            headers=headers,
-            params={"search": team_name},
-            timeout=15
-        )
-        teams_resp.raise_for_status()
-        teams_data = teams_resp.json()
-        if not teams_data.get("response"):
+        team = _find_best_team(team_name, headers, base_url)
+        if not team:
             return {"error": f"No team found matching '{team_name}'."}
-        team_id = teams_data["response"][0]["team"]["id"]
+        team_id = team["id"]
 
         # Step 2: check live fixtures
         fixtures_resp = requests.get(
-            f"{base_url}/fixtures",
+            f"{base_url}/teams/{team_id}/matches",
             headers=headers,
-            params={"team": team_id, "live": "all"},
+            params={"status": "LIVE"},
             timeout=15
         )
         fixtures_resp.raise_for_status()
         fixtures_data = fixtures_resp.json()
-        live_fixtures = fixtures_data.get("response", [])
-        if not live_fixtures:
-            return {"message": f"No live match for '{team_name}' right now."}
 
-        fixture_id = live_fixtures[0]["fixture"]["id"]
-
-        # Step 3: get events timeline
-        events_resp = requests.get(
-            f"{base_url}/fixtures/events",
-            headers=headers,
-            params={"fixture": fixture_id},
-            timeout=15
-        )
-        events_resp.raise_for_status()
-        events_data = events_resp.json()
-
-        return {"fixture_id": fixture_id, "timeline_events": events_data}
+        if fixtures_data.get("matches"):
+            live_match = fixtures_data["matches"][0]
+            return {"fixture_id": live_match["id"], "timeline_events": live_match}
+        else:
+            return {"message": f"No live match found for '{team_name}'."}
 
     except requests.exceptions.RequestException as e:
         return {"error": f"Request failed: {e}"}
     except Exception as e:
         return {"error": f"An unexpected error occurred: {e}"}
-
 
 @mcp.tool()
 def get_league_info(league_name: str) -> Dict[str, Any]:
@@ -1317,28 +933,33 @@ def get_league_info(league_name: str) -> Dict[str, Any]:
     get_league_info(league_name="Premier League")
     ```
     """
-    api_key = os.getenv("RAPID_API_KEY_FOOTBALL")
+    api_key = os.getenv("FOOTBALL_DATA_API_KEY")
     if not api_key:
-        return {"error": "RAPID_API_KEY_FOOTBALL environment variable not set."}
+        return {"error": "FOOTBALL_DATA_API_KEY environment variable not set."}
     if len(league_name.strip()) < 3:
         return {"error": "The league name must be at least 3 characters long."}
 
 
-    base_url = "https://v3.football.api-sports.io"
+    base_url = "https://api.football-data.org/v4"
     headers = {
-        "x-apisports-key": api_key
+        "X-Auth-Token": api_key
     }
 
     # Fetch league information
-    league_url = f"{base_url}/leagues"
-    params = {"search": league_name}
+    league_url = f"{base_url}/competitions"
     try:
-        resp = requests.get(league_url, headers=headers, params=params, timeout=15)
+        resp = requests.get(league_url, headers=headers, timeout=15)
         resp.raise_for_status()
         data = resp.json()
-        if not data.get("response"):
-          return {"error": f"No leagues found matching '{league_name}'."}
-        return data
+        if not data.get("competitions"):
+          return {"error": f"No leagues found."}
+        
+        # Find matching league
+        for competition in data["competitions"]:
+            if competition["name"].lower() == league_name.lower():
+                return {"response": [competition]}
+        
+        return {"error": f"No league found matching '{league_name}'."}
     except requests.exceptions.RequestException as e:
         return {"error": f"Request failed: {e}"}
     except Exception as e:
@@ -1365,39 +986,35 @@ def get_team_info(team_name: str) -> Dict[str, Any]:
     get_team_info(team_name="Real Madrid")
     ```
     """
-    api_key = os.getenv("RAPID_API_KEY_FOOTBALL")
+    api_key = os.getenv("FOOTBALL_DATA_API_KEY")
     if not api_key:
-        return {"error": "RAPID_API_KEY_FOOTBALL environment variable not set."}
+        return {"error": "FOOTBALL_DATA_API_KEY environment variable not set."}
     if len(team_name.strip()) < 3:
       return {"error": "The team name must be at least 3 characters long."}
 
-    base_url = "https://v3.football.api-sports.io"
+    base_url = "https://api.football-data.org/v4"
     headers = {
-        "x-apisports-key": api_key
+        "X-Auth-Token": api_key
     }
 
-    # Fetch team information
-    teams_url = f"{base_url}/teams"
-    teams_params = {"search": team_name}
     try:
-        resp = requests.get(teams_url, headers=headers, params=teams_params, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-        if not data.get("response"):
+        teams = _get_team_search_results(team_name, headers, base_url)
+        if not teams:
             return {"error": f"No team found matching '{team_name}'."}
-        return data
+        best_team = _find_best_team(team_name, headers, base_url, teams)
+        return {"response": teams, "best_match": best_team}
     except requests.exceptions.RequestException as e:
         return {"error": f"Request failed: {e}"}
     except Exception as e:
-      return {"error": f"An unexpected error occurred: {e}"}
+        return {"error": f"An unexpected error occurred: {e}"}
   
 
 if __name__ == "__main__":
     try:
-        print("Starting MCP server 'soccer_server' on 127.0.0.1:5000")
+        print("Starting MCP server 'soccer_server' on 127.0.0.1:5000", file=sys.stderr)
         # Use this approach to keep the server running
         mcp.run()
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error: {e}", file=sys.stderr)
         # Sleep before exiting to give time for error logs
         time.sleep(5)
