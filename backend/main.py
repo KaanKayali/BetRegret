@@ -1,36 +1,48 @@
 import asyncio
+import os
 import sys
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from dotenv import load_dotenv
 from langchain_core.tools.base import BaseTool
 from langchain_openai import ChatOpenAI
 from langchain.messages import HumanMessage
 from langchain.agents import create_agent
 from langchain_mcp_adapters.client import MultiServerMCPClient
-import os
-from dotenv import load_dotenv
 
+load_dotenv()
 
-async def main() -> None:
-    load_dotenv()
-    
+app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class ChatRequest(BaseModel):
+    message: str
+
+class ChatResponse(BaseModel):
+    reply: str
+
+async def build_agent():
     openai_api_key: str = os.getenv("OPENAI_API_KEY")
     football_data_api_key = os.getenv("FOOTBALL_DATA_API_KEY")
 
     if not openai_api_key or not football_data_api_key:
-        raise ValueError()
+        raise ValueError("OPENAI_API_KEY and FOOTBALL_DATA_API_KEY must be set")
 
     client: MultiServerMCPClient = MultiServerMCPClient({
         "soccer_server": {
             "transport": "stdio",
             "command": sys.executable,
-            "args": [
-                "./soccer-mcp-server/soccer_server.py"
-            ],
-            "env": {
-                "FOOTBALL_DATA_API_KEY": football_data_api_key
-            }
+            "args": ["./soccer-mcp-server/soccer_server.py"],
+            "env": {"FOOTBALL_DATA_API_KEY": football_data_api_key},
         }
     })
-    
+
     tools: list[BaseTool] = await client.get_tools()
     allowed_tool_names = {
         "get_league_fixtures",
@@ -52,26 +64,27 @@ async def main() -> None:
         if getattr(tool, "name", None) in short_descriptions:
             tool.description = short_descriptions[tool.name]
 
-
-    llm: ChatOpenAI = ChatOpenAI(
-        model="gpt-5.4",
-        api_key=openai_api_key
-    )
-
-    llm_agent = create_agent(
+    llm: ChatOpenAI = ChatOpenAI(model="gpt-4.1", api_key=openai_api_key)
+    return create_agent(
         model=llm,
         tools=tools,
-        system_prompt="You are a code agent and you are providing informations about football (soccer) based on the soccer_server functions. Evaluate based on the soccer_server tools provided"
+        system_prompt=(
+            "You are a code agent and you are providing information about football (soccer) "
+            "based on the soccer_server functions. Evaluate based on the soccer_server tools provided."
+        ),
     )
 
+agent = None
 
+@app.on_event("startup")
+async def startup_event():
+    global agent
+    agent = await build_agent()
 
-    answer = await llm_agent.ainvoke({
-        #"messages": [HumanMessage(content="What are the Champions League fixtures for season 2024?")]
-        "messages": [HumanMessage(content="What is the team information regarding Barcelona?")]
-    })
-    print(answer["messages"][-1].content)
- 
+@app.post("/chat", response_model=ChatResponse)
+async def chat_endpoint(req: ChatRequest):
+    if agent is None:
+        raise RuntimeError("Agent not initialized")
 
-if __name__ == "__main__":
-    asyncio.run(main())
+    answer = await agent.ainvoke({"messages": [HumanMessage(content=req.message)]})
+    return ChatResponse(reply=answer["messages"][-1].content)
