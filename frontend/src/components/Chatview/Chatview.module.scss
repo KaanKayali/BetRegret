@@ -1,0 +1,11 @@
+.container {
+  display: flex;
+  justify-content: center;
+  height: auto;
+  padding-top: 140px;
+  padding-bottom: 20px;
+
+  .chatview {
+    width: min(600px, 90%);
+  }
+}

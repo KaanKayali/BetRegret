@@ -1,0 +1,17 @@
+$green: #4fd1a5;
+.container {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 50px;
+
+  .userinput {
+    max-width: 400px;
+    overflow-wrap: break-word;
+    word-break: break-word;
+    text-align: left;
+    padding: 20px;
+    border-radius: 40px;
+    background-color: $green;
+    color: white;
+  }
+}
