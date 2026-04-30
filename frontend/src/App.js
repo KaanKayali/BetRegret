@@ -23,23 +23,51 @@ PSG might have stars, but Bayern is the constellation. 🌟`,
   ]);
 
   const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
 
   const handleInput = (e) => {
     setInput(e.target.value);
-    console.log(input);
   };
 
-  const handleClick = (e) => {
-    const newMessage = {
+  const handleClick = async () => {
+    if (loading || !input.trim()) return;
+
+    const userMessage = {
       role: "HumanMessage",
       content: input,
     };
-    setMessages((prev) => [...prev, newMessage]);
-    setInput("");
 
-    setTimeout(() => {
-      setMessages((prev) => [...prev, prev[1]]);
-    }, 10000);
+    setMessages((prev) => [...prev, userMessage]);
+    setInput("");
+    setLoading(true);
+
+    try {
+      const response = await fetch("http://localhost:8000/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: input }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Network response was not ok");
+      }
+
+      const data = await response.json();
+      setMessages((prev) => [
+        ...prev,
+        { role: "AIMessage", content: data.reply },
+      ]);
+    } catch (error) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "AIMessage",
+          content: "Fehler beim Verbinden mit dem Server.",
+        },
+      ]);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -51,6 +79,7 @@ PSG might have stars, but Bayern is the constellation. 🌟`,
           input={input}
           handleInput={handleInput}
           handleClick={handleClick}
+          loading={loading}
         />
       </div>
     </>
