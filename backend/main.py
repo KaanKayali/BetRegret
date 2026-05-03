@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime
 import os
 import sys
 from fastapi import FastAPI
@@ -64,13 +65,14 @@ async def build_agent():
         if getattr(tool, "name", None) in short_descriptions:
             tool.description = short_descriptions[tool.name]
 
-    llm: ChatOpenAI = ChatOpenAI(model="gpt-4.1", api_key=openai_api_key)
+    llm: ChatOpenAI = ChatOpenAI(model="gpt-5.4-thinking", api_key=openai_api_key)
     return create_agent(
         model=llm,
         tools=tools,
         system_prompt=(
-            "You are a code agent and you are providing information about football (soccer) "
-            "based on the soccer_server functions. Evaluate based on the soccer_server tools provided."
+            f"You are a football expert. Today's date is {datetime.now().strftime('%Y-%m-%d')}. "
+    "Use the soccer_server tools to provide accurate, real-time information. "
+    "Always check the current date before answering questions about 'next week' or seasons."
         ),
     )
 
