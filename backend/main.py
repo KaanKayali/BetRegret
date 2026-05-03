@@ -65,7 +65,7 @@ async def build_agent():
         if getattr(tool, "name", None) in short_descriptions:
             tool.description = short_descriptions[tool.name]
 
-    llm: ChatOpenAI = ChatOpenAI(model="gpt-5.4-thinking", api_key=openai_api_key)
+    llm: ChatOpenAI = ChatOpenAI(model="gpt-5.4", api_key=openai_api_key)
     return create_agent(
         model=llm,
         tools=tools,
