@@ -10,6 +10,7 @@ export async function postMessage(content) {
       throw new Error(`Server error: ${response.status}`);
     }
     const message = await response.json();
+    console.log(message);
     return message;
   } catch (error) {
     return { error: error.message };

@@ -4,7 +4,7 @@ import Chatfield from "./components/Chatfield/Chatfield";
 import UserInput from "./components/UserInput/UserInput";
 import Chatview from "./components/Chatview/Chatview";
 import { useState } from "react";
-import { postMessage } from "./components/services/services";
+import { postMessage } from "./services/services";
 
 export default function App() {
   const [messages, setMessages] = useState([]);
@@ -24,7 +24,7 @@ export default function App() {
     setMessages((prev) => [...prev, newMessage]);
     setInput("");
     setMessageLoading(true);
-    const message = await postMessage(newMessage.input);
+    const message = await postMessage(newMessage.content);
     if (message.error) {
       console.log(message.error);
       setMessageLoading(false);
@@ -32,7 +32,7 @@ export default function App() {
     }
     const newResponse = {
       role: "AIMessage",
-      content: message,
+      content: message.reply,
     };
     setMessages((prev) => [...prev, newResponse]);
     setMessageLoading(false);
