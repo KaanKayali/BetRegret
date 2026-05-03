@@ -42,7 +42,7 @@ export default function App() {
     <>
       <div className={styles.app}>
         <Header />
-        <Chatview messages={messages} />
+        <Chatview messages={messages} messageLoading={messageLoading} />
         <Chatfield
           input={input}
           handleInput={handleInput}
