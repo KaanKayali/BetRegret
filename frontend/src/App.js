@@ -4,32 +4,19 @@ import Chatfield from "./components/Chatfield/Chatfield";
 import UserInput from "./components/UserInput/UserInput";
 import Chatview from "./components/Chatview/Chatview";
 import { useState } from "react";
+import { postMessage } from "./services/services";
 
 export default function App() {
-  const [messages, setMessages] = useState([
-    {
-      role: "HumanMessage",
-      content: "Who is gonna win the game Bayern against PSG",
-    },
-    {
-      role: "AIMessage",
-      content: `Bayern are winning this week because somewhere deep inside the Allianz Arena, FC Bayern Munich have a secret setting called “Champions League Mode” — and once it’s activated, even WiFi signals start pressing high.
-Meanwhile Paris Saint-Germain will show up with more drip than a Milan fashion show, but Bayern will politely remind them this isn’t runway practice — it’s 90 minutes of controlled chaos, German engineering style.
-Also let’s be honest: if Thomas Müller starts smiling mid-game, it’s already over. That man doesn’t smile unless he’s mentally three passes ahead and planning the assist after the assist.
-And if things somehow get shaky? Don’t worry — Bayern’s DNA is basically:
-“Lose the ball → win it back → score → act like it was always the plan.”
-PSG might have stars, but Bayern is the constellation. 🌟`,
-    },
-  ]);
-
+  const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
+  const [messageLoading, setMessageLoading] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const handleInput = (e) => {
     setInput(e.target.value);
   };
 
-  const handleClick = async () => {
+  const sendMessage = async () => {
     if (loading || !input.trim()) return;
 
     const userMessage = {
@@ -39,6 +26,21 @@ PSG might have stars, but Bayern is the constellation. 🌟`,
 
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
+    setLoading(true);
+    setMessageLoading(true);
+    
+    const message = await postMessage(newMessage.content);
+    if (message.error) {
+      console.log(message.error);
+      setMessageLoading(false);
+      return;
+    }
+    const newResponse = {
+      role: "AIMessage",
+      content: message.reply,
+    };
+    setMessages((prev) => [...prev, newResponse]);
+    setMessageLoading(false);
     setLoading(true);
 
     try {
@@ -74,11 +76,11 @@ PSG might have stars, but Bayern is the constellation. 🌟`,
     <>
       <div className={styles.app}>
         <Header />
-        <Chatview messages={messages} />
+        <Chatview messages={messages} messageLoading={messageLoading} />
         <Chatfield
           input={input}
           handleInput={handleInput}
-          handleClick={handleClick}
+          handleClick={sendMessage}
           loading={loading}
         />
       </div>

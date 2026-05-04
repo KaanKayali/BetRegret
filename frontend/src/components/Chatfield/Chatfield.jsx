@@ -3,32 +3,43 @@ import styles from "./Chatfield.module.scss";
 import arrow from "../../assets/arrow-white.png";
 
 export default function Chatfield(props) {
-  const { input, handleInput, handleClick, loading = false } = props;
+  const { input, handleInput, handleSubmit } = props;
+  const [text, setText] = useState("");
+  const [messages, setMessages] = useState([]);
 
   return (
-    <>
-      <div className={styles.container}>
-        <div className={styles.chatfield}>
-          <input
-            type="text"
-            placeholder="Ask a question"
-            value={input}
-            onChange={handleInput}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") handleClick(e);
-            }}
-            disabled={loading}
-          />
-          <button
-            onClick={handleClick}
-            className={styles.button}
-            disabled={loading}
-            type="button"
-          >
-            <img src={arrow} alt="Send" />
-          </button>
-        </div>
+    <div className={styles.container}>
+      <div className={styles.chatfield}>
+        <input
+          type="text"
+          value={input}
+          placeholder="Ask a question"
+          onChange={handleInput}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") handleSubmit();
+          }}
+        />
+        <button
+          className={styles.button}
+          onClick={handleSubmit}
+          // disabled={loading}
+        >
+          <img src={arrow} alt="Send" />
+        </button>
       </div>
-    </>
+
+      {/* <div className={styles.messageArea}>
+        {messages.map((msg, index) => (
+          <div
+            key={index}
+            className={
+              msg.role === "bot" ? styles.botMessage : styles.userMessage
+            }
+          >
+            {msg.text}
+          </div>
+        ))}
+      </div> */}
+    </div>
   );
 }
