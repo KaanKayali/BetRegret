@@ -29,37 +29,10 @@ export default function App() {
     setLoading(true);
     setMessageLoading(true);
     
-    const message = await postMessage(newMessage.content);
+    const message = await postMessage(userMessage.content);
+    
     if (message.error) {
       console.log(message.error);
-      setMessageLoading(false);
-      return;
-    }
-    const newResponse = {
-      role: "AIMessage",
-      content: message.reply,
-    };
-    setMessages((prev) => [...prev, newResponse]);
-    setMessageLoading(false);
-    setLoading(true);
-
-    try {
-      const response = await fetch("http://localhost:8000/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: input }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Network response was not ok");
-      }
-
-      const data = await response.json();
-      setMessages((prev) => [
-        ...prev,
-        { role: "AIMessage", content: data.reply },
-      ]);
-    } catch (error) {
       setMessages((prev) => [
         ...prev,
         {
@@ -67,9 +40,16 @@ export default function App() {
           content: "Fehler beim Verbinden mit dem Server.",
         },
       ]);
-    } finally {
-      setLoading(false);
+    } else {
+      const newResponse = {
+        role: "AIMessage",
+        content: message.reply,
+      };
+      setMessages((prev) => [...prev, newResponse]);
     }
+    
+    setMessageLoading(false);
+    setLoading(false);
   };
 
   return (
@@ -80,7 +60,7 @@ export default function App() {
         <Chatfield
           input={input}
           handleInput={handleInput}
-          handleClick={sendMessage}
+          handleSubmit={sendMessage}
           loading={loading}
         />
       </div>

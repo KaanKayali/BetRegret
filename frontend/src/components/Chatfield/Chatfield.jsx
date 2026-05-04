@@ -4,8 +4,6 @@ import arrow from "../../assets/arrow-white.png";
 
 export default function Chatfield(props) {
   const { input, handleInput, handleSubmit } = props;
-  const [text, setText] = useState("");
-  const [messages, setMessages] = useState([]);
 
   return (
     <div className={styles.container}>
