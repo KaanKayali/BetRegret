@@ -24,13 +24,14 @@ export default function App() {
       content: input,
     };
 
-    setMessages((prev) => [...prev, userMessage]);
+    const newHistory = [...messages, userMessage];
+    setMessages(newHistory);
     setInput("");
     setLoading(true);
     setMessageLoading(true);
-    
-    const message = await postMessage(userMessage.content);
-    
+
+    const message = await postMessage(newHistory);
+
     if (message.error) {
       console.log(message.error);
       setMessages((prev) => [
@@ -47,7 +48,7 @@ export default function App() {
       };
       setMessages((prev) => [...prev, newResponse]);
     }
-    
+
     setMessageLoading(false);
     setLoading(false);
   };

@@ -8,9 +8,10 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from langchain_core.tools.base import BaseTool
 from langchain_openai import ChatOpenAI
-from langchain.messages import HumanMessage
+from langchain.messages import HumanMessage, AIMessage
 from langchain.agents import create_agent
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from typing import List
 
 load_dotenv()
 
@@ -28,8 +29,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+class Message(BaseModel):
+    role: str
+    content: str
+
 class ChatRequest(BaseModel):
-    message: str
+    messages: List[Message]
 
 class ChatResponse(BaseModel):
     reply: str
@@ -93,7 +98,14 @@ async def chat_endpoint(req: ChatRequest):
     if agent is None:
         raise RuntimeError("Agent not initialized")
 
-    answer = await agent.ainvoke({"messages": [HumanMessage(content=req.message)]})
+    lc_messages = []
+    for msg in req.messages:
+        if msg.role == "HumanMessage":
+            lc_messages.append(HumanMessage(content=msg.content))
+        elif msg.role == "AIMessage":
+            lc_messages.append(AIMessage(content=msg.content))
+
+    answer = await agent.ainvoke({"messages": lc_messages})
     return ChatResponse(reply=answer["messages"][-1].content)
 
 if __name__ == "__main__":

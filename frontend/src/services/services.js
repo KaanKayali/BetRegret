@@ -1,9 +1,9 @@
-export async function postMessage(content) {
+export async function postMessage(messages) {
   try {
     const response = await fetch("http://localhost:8000/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: content }),
+      body: JSON.stringify({ messages: messages }),
     });
 
     if (!response.ok) {
