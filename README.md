@@ -1,4 +1,4 @@
-# BetRegret - Intelligenter Fußball-Chatbot
+# BetRegret - Intelligenter Fussball-Chatbot
 
 BetRegret ist ein Chatbot, der Fragen rund um den internationalen Fussball, Ligen, Teams und Live-Spiele beantworten kann. Das Projekt ist aus den Anforderungen des Kurses "Hands on Chatbots" entstanden.
 
