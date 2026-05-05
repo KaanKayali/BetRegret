@@ -11,6 +11,7 @@ from langchain_openai import ChatOpenAI
 from langchain.messages import HumanMessage, AIMessage
 from langchain.agents import create_agent
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langfuse.langchain import CallbackHandler
 from typing import List
 
 load_dotenv()
@@ -105,7 +106,11 @@ async def chat_endpoint(req: ChatRequest):
         elif msg.role == "AIMessage":
             lc_messages.append(AIMessage(content=msg.content))
 
-    answer = await agent.ainvoke({"messages": lc_messages})
+    langfuse_handler = CallbackHandler()
+    answer = await agent.ainvoke(
+        {"messages": lc_messages},
+        config={"callbacks": [langfuse_handler]}
+    )
     return ChatResponse(reply=answer["messages"][-1].content)
 
 if __name__ == "__main__":

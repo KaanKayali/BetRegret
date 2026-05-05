@@ -18,6 +18,7 @@ dependencies = [
     "mcp[cli]",
     "pandas",
     "pydantic",
+    "langfuse>=4.5.1",
 ]
 
 [project.scripts]
