@@ -13,7 +13,6 @@ export default function App() {
 
   const handleInput = (e) => {
     setInput(e.target.value);
-    console.log(input);
   };
 
   const sendMessage = async (e) => {
@@ -21,7 +20,8 @@ export default function App() {
       role: "HumanMessage",
       content: input,
     };
-    setMessages((prev) => [...prev, newMessage]);
+
+    setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setMessageLoading(true);
     const message = await postMessage(newMessage.content);

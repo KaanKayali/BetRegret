@@ -8,7 +8,10 @@ from datetime import datetime, timedelta
 import pandas as pd
 import os
 import re
+import unicodedata
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 
 # print(f"Python executable: {sys.executable}", file=sys.stderr)
@@ -29,15 +32,38 @@ mcp = FastMCP(
     # port=5000,
 )
 
+REQUEST_SESSION = requests.Session()
+RETRY_STRATEGY = Retry(
+    total=3,
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=["HEAD", "GET", "OPTIONS"],
+    backoff_factor=1,
+    raise_on_status=False,
+)
+ADAPTER = HTTPAdapter(max_retries=RETRY_STRATEGY)
+REQUEST_SESSION.mount("https://", ADAPTER)
+REQUEST_SESSION.mount("http://", ADAPTER)
+
+TEAM_SEARCH_CACHE: Dict[str, List[Dict[str, Any]]] = {}
+COMPETITIONS_CACHE: Optional[Dict[str, Any]] = None
+TEAM_ID_CACHE: Dict[str, Dict[str, Any]] = {}
+
 
 def _normalize_team_name(team_name: str) -> str:
-    return team_name.strip().lower()
+    normalized = team_name.strip().lower()
+    normalized = unicodedata.normalize("NFKD", normalized)
+    normalized = normalized.encode("ascii", "ignore").decode("ascii")
+    normalized = re.sub(r"[^a-z0-9 ]+", "", normalized)
+    normalized = re.sub(r"\b(fc|afc|cf|ac|a\.c\.)\b", "", normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
 
 
 def _normalize_team_string(value: Optional[str]) -> str:
     if not value:
         return ""
     normalized = value.strip().lower()
+    normalized = unicodedata.normalize("NFKD", normalized)
+    normalized = normalized.encode("ascii", "ignore").decode("ascii")
     normalized = re.sub(r"[^a-z0-9 ]+", "", normalized)
     normalized = re.sub(r"\b(fc|afc|cf|ac|a\.c\.)\b", "", normalized)
     return re.sub(r"\s+", " ", normalized).strip()
@@ -57,10 +83,29 @@ def _team_contains_query(team: Dict[str, Any], query: str) -> bool:
     return query in name or query in short_name or query == tla
 
 
+def _fetch_json(url: str, headers: Dict[str, str], params: Optional[Dict[str, Any]] = None, timeout: int = 15) -> Dict[str, Any]:
+    response = REQUEST_SESSION.get(url, headers=headers, params=params, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
+
+
+def _get_competitions(headers: Dict[str, str], base_url: str) -> Dict[str, Any]:
+    global COMPETITIONS_CACHE
+    if COMPETITIONS_CACHE is not None:
+        return COMPETITIONS_CACHE
+
+    competitions_url = f"{base_url}/competitions"
+    COMPETITIONS_CACHE = _fetch_json(competitions_url, headers, timeout=15)
+    return COMPETITIONS_CACHE
+
+
 def _get_team_search_results(team_name: str, headers: Dict[str, str], base_url: str) -> List[Dict[str, Any]]:
     query = _normalize_team_name(team_name)
     if not query:
         return []
+
+    if query in TEAM_SEARCH_CACHE:
+        return TEAM_SEARCH_CACHE[query]
 
     teams_url = f"{base_url}/teams"
     results: List[Dict[str, Any]] = []
@@ -69,9 +114,7 @@ def _get_team_search_results(team_name: str, headers: Dict[str, str], base_url: 
 
     while True:
         params = {"limit": page_size, "offset": offset}
-        resp = requests.get(teams_url, headers=headers, params=params, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
+        data = _fetch_json(teams_url, headers, params=params, timeout=15)
         page_teams = data.get("teams", [])
         if not page_teams:
             break
@@ -86,6 +129,7 @@ def _get_team_search_results(team_name: str, headers: Dict[str, str], base_url: 
         if offset >= 2000:
             break
 
+    TEAM_SEARCH_CACHE[query] = results
     return results
 
 
@@ -115,17 +159,19 @@ def _find_best_team(team_name: str, headers: Dict[str, str], base_url: str, team
     if not query:
         return None
 
+    if query in TEAM_ID_CACHE:
+        return TEAM_ID_CACHE[query]
+
     if teams is None:
         teams = _get_team_search_results(team_name, headers, base_url)
     if not teams:
         return None
 
     exact_matches = [team for team in teams if _team_matches_query(team, query)]
-    if exact_matches:
-        return exact_matches[0]
-
-    scored = sorted(teams, key=lambda team: _score_team_match(team, query), reverse=True)
-    return scored[0] if scored else None
+    best_team = exact_matches[0] if exact_matches else (sorted(teams, key=lambda team: _score_team_match(team, query), reverse=True)[0] if teams else None)
+    if best_team:
+        TEAM_ID_CACHE[query] = best_team
+    return best_team
 
 
 @mcp.tool()
@@ -203,10 +249,7 @@ def get_league_id_by_name(league_name: str) -> Dict[str, Any]:
     }
 
     try:
-        competitions_url = f"{base_url}/competitions"
-        response = requests.get(competitions_url, headers=headers, timeout=15)
-        response.raise_for_status()
-        data = response.json()
+        data = _get_competitions(headers, base_url)
 
         # Search for the league by name
         for competition in data.get("competitions", []):
@@ -264,10 +307,7 @@ def get_all_leagues_id(country: Optional[List[str]] = None) -> Dict[str, Any]:
     }
 
     try:
-        competitions_url = f"{base_url}/competitions"
-        response = requests.get(competitions_url, headers=headers, timeout=15)
-        response.raise_for_status()
-        data = response.json()
+        data = _get_competitions(headers, base_url)
 
         leagues: Dict[str, Dict[str, Any]] = {}
         for competition in data.get("competitions", []):

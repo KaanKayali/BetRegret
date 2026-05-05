@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sys
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -13,7 +14,13 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 
 load_dotenv()
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global agent
+    agent = await build_agent()
+    yield
+
+app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -69,17 +76,15 @@ async def build_agent():
         model=llm,
         tools=tools,
         system_prompt=(
-            "You are a code agent and you are providing information about football (soccer) "
-            "based on the soccer_server functions. Evaluate based on the soccer_server tools provided."
+            "You are a knowledgeable football assistant. Use the provided soccer_server tools to answer questions about football teams, live matches, fixtures, and league data. "
+            "When the user mentions a team name, interpret it correctly and call the tool with the most likely official team name. "
+            "For example: 'Bayern Munich' should be searched as 'FC Bayern München', 'Man City' as 'Manchester City', 'PSG' as 'Paris Saint-Germain', etc. "
+            "If a tool call fails or returns an error (like 429 rate limit), explain the error to the user and suggest they try again later. "
+            "Always be precise about team names and league information. If unsure about a team name, explain to the user and ask for clarification."
         ),
     )
 
 agent = None
-
-@app.on_event("startup")
-async def startup_event():
-    global agent
-    agent = await build_agent()
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(req: ChatRequest):
@@ -88,3 +93,8 @@ async def chat_endpoint(req: ChatRequest):
 
     answer = await agent.ainvoke({"messages": [HumanMessage(content=req.message)]})
     return ChatResponse(reply=answer["messages"][-1].content)
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
