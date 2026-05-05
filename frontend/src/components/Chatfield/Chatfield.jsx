@@ -3,7 +3,7 @@ import styles from "./Chatfield.module.scss";
 import arrow from "../../assets/arrow-white.png";
 
 export default function Chatfield(props) {
-  const { input, handleInput, handleClick, loading = false } = props;
+  const { input, handleInput, handleSubmit, loading = false } = props;
 
   return (
     <>
@@ -15,12 +15,12 @@ export default function Chatfield(props) {
             value={input}
             onChange={handleInput}
             onKeyDown={(e) => {
-              if (e.key === "Enter") handleClick(e);
+              if (e.key === "Enter") handleSubmit(e);
             }}
             disabled={loading}
           />
           <button
-            onClick={handleClick}
+            onClick={handleSubmit}
             className={styles.button}
             disabled={loading}
             type="button"

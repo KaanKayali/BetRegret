@@ -16,7 +16,7 @@ export default function App() {
   };
 
   const sendMessage = async (e) => {
-    const newMessage = {
+    const userMessage = {
       role: "HumanMessage",
       content: input,
     };
@@ -24,17 +24,17 @@ export default function App() {
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setMessageLoading(true);
-    const message = await postMessage(newMessage.content);
+    const message = await postMessage(userMessage.content);
     if (message.error) {
       console.log(message.error);
       setMessageLoading(false);
       return;
     }
-    const newResponse = {
+    const AIMessage = {
       role: "AIMessage",
       content: message.reply,
     };
-    setMessages((prev) => [...prev, newResponse]);
+    setMessages((prev) => [...prev, AIMessage]);
     setMessageLoading(false);
   };
 
