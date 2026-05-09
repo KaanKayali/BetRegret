@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sys
+from datetime import datetime
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -85,13 +86,13 @@ async def build_agent():
         if getattr(tool, "name", None) in short_descriptions:
             tool.description = short_descriptions[tool.name]
 
-    # LLM Modell festlegen
-    llm: ChatOpenAI = ChatOpenAI(model="gpt-4o", api_key=openai_api_key)
+    current_date_str = datetime.now().strftime("%Y-%m-%d")
+    llm: ChatOpenAI = ChatOpenAI(model="gpt-5.4", api_key=openai_api_key)
     return create_agent(
         model=llm,
         tools=tools,
         system_prompt=(
-            "You are a knowledgeable football assistant. Use the provided soccer_server tools to answer questions about football teams, live matches, fixtures, and league data."
+            f"You are a knowledgeable football assistant. Today's date is {current_date_str}. Use the provided soccer_server tools to answer questions about football teams, live matches, fixtures, and league data."
             "When the user mentions a team name, interpret it correctly and call the tool with the most likely official team name."
             "For example: 'Bayern Munich' should be searched as 'FC Bayern München', 'Man City' as 'Manchester City', 'PSG' as 'Paris Saint-Germain', etc."
             "If a tool call fails or returns an error (like 429 rate limit), explain the error to the user and suggest they try again later."
