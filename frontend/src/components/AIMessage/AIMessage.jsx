@@ -2,12 +2,21 @@ import React from "react";
 import styles from "./AIMessage.module.scss";
 
 function parseInlineStyles(text) {
-  const parts = text.split(/(\*\*[\s\S]+?\*\*)/g);
-  return parts.map((part, index) => {
-    if (part.startsWith("**") && part.endsWith("**")) {
-      return <strong key={index}>{part.slice(2, -2)}</strong>;
+  const imageParts = text.split(/(!\[.*?\]\(.*?\))/g);
+
+  return imageParts.map((part, index) => {
+    const imgMatch = part.match(/^!\[(.*?)\]\((.*?)\)$/);
+    if (imgMatch) {
+      return <img key={`img-${index}`} src={imgMatch[2]} alt={imgMatch[1]} style={{ maxWidth: "100%", height: "auto", display: "inline-block", verticalAlign: "middle", margin: "0 5px" }} />;
     }
-    return <React.Fragment key={index}>{part}</React.Fragment>;
+
+    const boldParts = part.split(/(\*\*[\s\S]+?\*\*)/g);
+    return boldParts.map((bPart, bIndex) => {
+      if (bPart.startsWith("**") && bPart.endsWith("**")) {
+        return <strong key={`b-${index}-${bIndex}`}>{bPart.slice(2, -2)}</strong>;
+      }
+      return <React.Fragment key={`f-${index}-${bIndex}`}>{bPart}</React.Fragment>;
+    });
   });
 }
 

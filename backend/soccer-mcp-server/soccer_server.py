@@ -18,14 +18,14 @@ from urllib3.util.retry import Retry
 # print(f"Python path: {sys.path}", file=sys.stderr)
 print(f"Current working directory: {os.getcwd()}", file=sys.stderr)
 
-# Handle SIGINT (Ctrl+C) gracefully
+# Server bei Strg+C sauber beenden
 def signal_handler(sig, frame):
     print("Shutting down server gracefully...", file=sys.stderr)
     sys.exit(0)
 
 signal.signal(signal.SIGINT, signal_handler)
 
-# Create an MCP server
+# MCP-Server initialisieren
 mcp = FastMCP(
     name="soccer_server",
     # host="127.0.0.1",
@@ -47,8 +47,11 @@ REQUEST_SESSION.mount("http://", ADAPTER)
 TEAM_SEARCH_CACHE: Dict[str, List[Dict[str, Any]]] = {}
 COMPETITIONS_CACHE: Optional[Dict[str, Any]] = None
 TEAM_ID_CACHE: Dict[str, Dict[str, Any]] = {}
+TEAM_FULL_DATA_CACHE: Dict[int, Dict[str, Any]] = {}
+STANDINGS_DATA_CACHE: Dict[int, Dict[str, Any]] = {}
 
 
+# Teamnamen normalisieren (Kleinbuchstaben, Sonderzeichen entfernen)
 def _normalize_team_name(team_name: str) -> str:
     normalized = team_name.strip().lower()
     normalized = unicodedata.normalize("NFKD", normalized)
@@ -83,10 +86,25 @@ def _team_contains_query(team: Dict[str, Any], query: str) -> bool:
     return query in name or query in short_name or query == tla
 
 
+# JSON von API abrufen mit Retry-Logik bei Rate-Limits
 def _fetch_json(url: str, headers: Dict[str, str], params: Optional[Dict[str, Any]] = None, timeout: int = 15) -> Dict[str, Any]:
-    response = REQUEST_SESSION.get(url, headers=headers, params=params, timeout=timeout)
-    response.raise_for_status()
-    return response.json()
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = REQUEST_SESSION.get(url, headers=headers, params=params, timeout=timeout)
+            if response.status_code == 429:
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 2 # Wartezeit bei API-Limit (429)
+                    print(f"Rate limited (429). Waiting {wait_time}s and retrying...", file=sys.stderr)
+                    time.sleep(wait_time)
+                    continue
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.HTTPError as e:
+            if attempt < max_retries - 1 and response.status_code == 429:
+                continue
+            raise e
+    return {}
 
 
 def _get_competitions(headers: Dict[str, str], base_url: str) -> Dict[str, Any]:
@@ -154,6 +172,7 @@ def _score_team_match(team: Dict[str, Any], query: str) -> int:
     return score
 
 
+# Bestes passendes Team aus Suchergebnissen finden
 def _find_best_team(team_name: str, headers: Dict[str, str], base_url: str, teams: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
     query = _normalize_team_name(team_name)
     if not query:
@@ -163,6 +182,8 @@ def _find_best_team(team_name: str, headers: Dict[str, str], base_url: str, team
         return TEAM_ID_CACHE[query]
 
     if teams is None:
+        print(f"Waiting 60s before searching for team: {team_name}...", file=sys.stderr)
+        time.sleep(60)
         teams = _get_team_search_results(team_name, headers, base_url)
     if not teams:
         return None
@@ -174,13 +195,69 @@ def _find_best_team(team_name: str, headers: Dict[str, str], base_url: str, team
     return best_team
 
 
+# Tabellendaten eines Teams abrufen (Position, PPG, GD)
+def _get_team_standings_data(team_name: str, headers: Dict[str, str], base_url: str) -> Optional[Dict[str, Any]]:
+    team = _find_best_team(team_name, headers, base_url)
+    if not team:
+        return None
+    
+    team_id = team['id']
+    
+    # Wartepause um Rate-Limits der API zu vermeiden
+    print(f"Waiting 60s before fetching team data for {team_name}...", file=sys.stderr)
+    time.sleep(60)
+
+    # Wettbewerbe des Teams abrufen
+    if team_id in TEAM_FULL_DATA_CACHE:
+        team_data = TEAM_FULL_DATA_CACHE[team_id]
+    else:
+        team_data = _fetch_json(f"{base_url}/teams/{team_id}", headers)
+        TEAM_FULL_DATA_CACHE[team_id] = team_data
+    
+    # Erneute Pause
+    print(f"Waiting 60s before fetching standings...", file=sys.stderr)
+    time.sleep(60)
+
+    # Erste verfügbare Liga mit Tabelle finden
+    for comp in team_data.get('runningCompetitions', []):
+        if comp.get('type') not in ['LEAGUE', 'CUP']: # We prefer leagues for better stats
+            continue
+            
+        comp_id = comp['id']
+        if comp_id in STANDINGS_DATA_CACHE:
+            standings = STANDINGS_DATA_CACHE[comp_id]
+        else:
+            try:
+                standings = _fetch_json(f"{base_url}/competitions/{comp_id}/standings", headers)
+                STANDINGS_DATA_CACHE[comp_id] = standings
+            except:
+                continue
+        
+        for s in standings.get('standings', []):
+            if s.get('type') == 'TOTAL': # Gesamttabelle verwenden
+                for entry in s.get('table', []):
+                    if entry['team']['id'] == team_id:
+                        return {
+                            "team_name": entry['team']['name'],
+                            "team_id": team_id,
+                            "position": entry['position'],
+                            "playedGames": entry['playedGames'],
+                            "points": entry['points'],
+                            "goalsFor": entry['goalsFor'],
+                            "goalsAgainst": entry['goalsAgainst'],
+                            "goalDifference": entry['goalDifference'],
+                            "league_name": comp['name']
+                        }
+    return None
+
+
 @mcp.tool()
 def get_league_fixtures(league_id: int, season: int) -> Dict[str, Any]:
     """Retrieves all fixtures for a given league and season.
 
     Args:
         league_id (int): The ID of the league.
-        season (int): The year of the season (e.g., 2023 for the 2023-2024 season).
+        season (int): The year of the season (e.g., 2025 for the 2025-2026 season).
 
     Returns:
         Dict[str, Any]: A dictionary containing fixture data or an error message. Key fields:
@@ -189,7 +266,7 @@ def get_league_fixtures(league_id: int, season: int) -> Dict[str, Any]:
 
     Example:
         ```python
-        get_league_fixtures(league_id=39, season=2023)
+        get_league_fixtures(league_id=39, season=202)
         ```
     """
     api_key = os.getenv("FOOTBALL_DATA_API_KEY")
@@ -733,7 +810,7 @@ def get_league_schedule_by_date(league_name: str, date: List[str], season: str) 
         "X-Auth-Token": api_key
     }
 
-    # Step 1: Get league ID by searching name
+    # Schritt 1: Liga-ID über den Namen suchen
     try:
         leagues_url = f"{base_url}/competitions"
         resp = requests.get(leagues_url, headers=headers, timeout=15)
@@ -743,7 +820,7 @@ def get_league_schedule_by_date(league_name: str, date: List[str], season: str) 
         if not data.get("competitions"):
             return {"error": f"No leagues found."}
 
-        # Find the correct league
+        # Die richtige Liga in der Liste finden
         league_id = None
         for competition in data["competitions"]:
              if competition["name"].lower() == league_name.lower():
@@ -753,7 +830,7 @@ def get_league_schedule_by_date(league_name: str, date: List[str], season: str) 
         if not league_id:
             return {"error": f"No league found matching '{league_name}'."}
 
-        # Step 2: Fetch fixtures for each date
+        # Schritt 2: Spiele für jedes Datum abrufen
         combined_results = {}
         for d in date:
             try:
@@ -806,14 +883,14 @@ def get_live_match_for_team(team_name: str) -> Dict[str, Any]:
         "X-Auth-Token": api_key
     }
 
-    # Step 1: find team ID
+    # Schritt 1: Team-ID finden
     try:
         team = _find_best_team(team_name, headers, base_url)
         if not team:
             return {"error": f"No team found matching '{team_name}'."}
         team_id = team["id"]
 
-        # Step 2: check for live matches
+        # Schritt 2: Auf Live-Spiele prüfen
         fixtures_resp = requests.get(
             f"{base_url}/teams/{team_id}/matches",
             headers=headers,
@@ -865,13 +942,13 @@ def get_live_stats_for_team(team_name: str) -> Dict[str, Any]:
     }
 
     try:
-        # Step 1: get team ID
+        # Schritt 1: Team-ID abrufen
         team = _find_best_team(team_name, headers, base_url)
         if not team:
             return {"error": f"No team found matching '{team_name}'."}
         team_id = team["id"]
 
-        # Step 2: check for live fixtures
+        # Schritt 2: Nach Live-Begegnungen suchen
         fixtures_resp = requests.get(
             f"{base_url}/teams/{team_id}/matches",
             headers=headers,
@@ -924,13 +1001,13 @@ def get_live_match_timeline(team_name: str) -> Dict[str, Any]:
     }
 
     try:
-        # Step 1: team ID
+        # Schritt 1: Team-ID ermitteln
         team = _find_best_team(team_name, headers, base_url)
         if not team:
             return {"error": f"No team found matching '{team_name}'."}
         team_id = team["id"]
 
-        # Step 2: check live fixtures
+        # Schritt 2: Live-Spielplan prüfen
         fixtures_resp = requests.get(
             f"{base_url}/teams/{team_id}/matches",
             headers=headers,
@@ -985,7 +1062,7 @@ def get_league_info(league_name: str) -> Dict[str, Any]:
         "X-Auth-Token": api_key
     }
 
-    # Fetch league information
+    # Liga-Informationen von API laden
     league_url = f"{base_url}/competitions"
     try:
         resp = requests.get(league_url, headers=headers, timeout=15)
@@ -994,7 +1071,7 @@ def get_league_info(league_name: str) -> Dict[str, Any]:
         if not data.get("competitions"):
           return {"error": f"No leagues found."}
         
-        # Find matching league
+        # Passende Liga finden
         for competition in data["competitions"]:
             if competition["name"].lower() == league_name.lower():
                 return {"response": [competition]}
@@ -1049,10 +1126,106 @@ def get_team_info(team_name: str) -> Dict[str, Any]:
         return {"error": f"An unexpected error occurred: {e}"}
   
 
+@mcp.tool()
+def predict_match_outcome(team_home_name: str, team_away_name: str) -> Dict[str, Any]:
+    """Predicts the outcome of a football match between two teams.
+    Analyzes their current league statistics, points per game, and goal differences 
+    to calculate win, draw, and loss probabilities.
+
+    Args:
+        team_home_name (str): Name of the home team (e.g., 'Arsenal').
+        team_away_name (str): Name of the away team (e.g., 'Liverpool').
+
+    Returns:
+        Dict[str, Any]: A dictionary containing probabilities, analysis, and a betting recommendation.
+    """
+    start_time = time.time()
+    api_key = os.getenv("FOOTBALL_DATA_API_KEY")
+    if not api_key:
+        return {"error": "FOOTBALL_DATA_API_KEY environment variable not set."}
+
+    base_url = "https://api.football-data.org/v4"
+    headers = {"X-Auth-Token": api_key}
+
+    try:
+        # Heimteam-Statistiken laden
+        home_stats = _get_team_standings_data(team_home_name, headers, base_url)
+        if not home_stats:
+            return {"error": f"Could not find league stats for home team: {team_home_name}"}
+
+        # Wartepause zwischen den Teams (Sequential Polling)
+        print("Waiting 60s before processing away team...", file=sys.stderr)
+        time.sleep(60)
+
+        # Auswärtsteam-Statistiken laden
+        away_stats = _get_team_standings_data(team_away_name, headers, base_url)
+        if not away_stats:
+            return {"error": f"Could not find league stats for away team: {team_away_name}"}
+
+        # Berechnungslogik (PPG und Torverhältnis)
+        def calc_metrics(stats):
+            played = stats['playedGames']
+            if played == 0:
+                return 1.0, 0.0 # Default base stats for new season
+            ppg = stats['points'] / played
+            gdpg = stats['goalDifference'] / played
+            return ppg, gdpg
+
+        ppg_h, gdpg_h = calc_metrics(home_stats)
+        ppg_a, gdpg_a = calc_metrics(away_stats)
+
+        # Basic score based on PPG (weight 70%) and GDPG (weight 30%)
+        # Normalizing PPG to a 0-1 scale (approx 3.0 is max)
+        score_h = (ppg_h * 0.7) + (gdpg_h * 0.3) + 0.2 # +0.2 for home advantage
+        score_a = (ppg_a * 0.7) + (gdpg_a * 0.3)
+
+        # Wahrscheinlichkeiten berechnen (Sigmoid-Modell)
+        import math
+        diff = score_h - score_a
+        
+        # Win Probabilities (simplified model)
+        prob_h = 1 / (1 + math.exp(-diff))
+        prob_a = 1 - prob_h
+        
+        # Add a draw probability (usually around 20-30%)
+        # If teams are very close, draw is more likely
+        draw_factor = 0.25 * math.exp(-abs(diff) * 2)
+        
+        # Redistribute
+        p_win_h = round(prob_h * (1 - draw_factor) * 100, 1)
+        p_win_a = round(prob_a * (1 - draw_factor) * 100, 1)
+        p_draw = round(draw_factor * 100, 1)
+
+        recommendation = "Home Win" if p_win_h > p_win_a + 10 else ("Away Win" if p_win_a > p_win_h + 10 else "Draw / Close Match")
+
+        return {
+            "prediction": {
+                "home_team": home_stats['team_name'],
+                "away_team": away_stats['team_name'],
+                "probabilities": {
+                    "home_win": f"{p_win_h}%",
+                    "draw": f"{p_draw}%",
+                    "away_win": f"{p_win_a}%"
+                },
+                "recommendation": recommendation,
+                "analysis": {
+                    "home_league": home_stats['league_name'],
+                    "home_ppg": round(ppg_h, 2),
+                    "away_league": away_stats['league_name'],
+                    "away_ppg": round(ppg_a, 2)
+                },
+                "execution_time_seconds": round(time.time() - start_time, 2)
+            }
+        }
+
+    except Exception as e:
+        return {"error": f"Prediction failed: {str(e)}"}
+
+
 if __name__ == "__main__":
     try:
         print("Starting MCP server 'soccer_server' on 127.0.0.1:5000", file=sys.stderr)
-        # Use this approach to keep the server running
+        # Server dauerhaft laufen lassen
         mcp.run()
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)

@@ -19,6 +19,7 @@ load_dotenv()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Globaler Agent
     global agent
     agent = await build_agent()
     yield
@@ -41,6 +42,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     reply: str
 
+# Agent-Konfiguration und Tool-Anbindung
 async def build_agent():
     openai_api_key: str = os.getenv("OPENAI_API_KEY")
     football_data_api_key = os.getenv("FOOTBALL_DATA_API_KEY")
@@ -57,29 +59,35 @@ async def build_agent():
         }
     })
 
+    # Tools vom MCP-Server laden
     tools: list[BaseTool] = await client.get_tools()
+    
+    # Filter für erlaubte Tools
     allowed_tool_names = {
         "get_league_fixtures",
         "get_league_id_by_name",
         "get_team_fixtures",
         "get_team_info",
         "get_live_match_for_team",
+        "predict_match_outcome",
     }
     tools = [tool for tool in tools if getattr(tool, "name", None) in allowed_tool_names]
 
+    # Kurzbeschreibungen für den Agenten
     short_descriptions = {
         "get_league_fixtures": "Get fixtures for a league and season.",
         "get_league_id_by_name": "Find a league ID by name.",
         "get_team_fixtures": "Get past or upcoming fixtures for a team.",
         "get_team_info": "Get basic information for a team by name.",
         "get_live_match_for_team": "Check whether a team currently has a live match.",
+        "predict_match_outcome": "Predict the outcome and betting probabilities for a match between two teams.",
     }
     for tool in tools:
         if getattr(tool, "name", None) in short_descriptions:
             tool.description = short_descriptions[tool.name]
 
     current_date_str = datetime.now().strftime("%Y-%m-%d")
-    llm: ChatOpenAI = ChatOpenAI(model="gpt-5.4", api_key=openai_api_key)
+    llm: ChatOpenAI = ChatOpenAI(model="gpt-4.1", api_key=openai_api_key)
     return create_agent(
         model=llm,
         tools=tools,
@@ -101,6 +109,7 @@ async def chat_endpoint(req: ChatRequest):
     if agent is None:
         raise RuntimeError("Agent not initialized")
 
+    # Chat-Verlauf für LangChain aufbereiten
     lc_messages = []
     for msg in req.messages:
         if msg.role == "HumanMessage":
@@ -108,6 +117,7 @@ async def chat_endpoint(req: ChatRequest):
         elif msg.role == "AIMessage":
             lc_messages.append(AIMessage(content=msg.content))
 
+    # Monitoring via Langfuse
     langfuse_handler = CallbackHandler()
     answer = await agent.ainvoke(
         {"messages": lc_messages},
