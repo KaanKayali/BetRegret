@@ -71,6 +71,7 @@ async def build_agent():
         "get_team_info",
         "get_live_match_for_team",
         "predict_match_outcome",
+        "get_league_scorers",
     }
     tools = [tool for tool in tools if getattr(tool, "name", None) in allowed_tool_names]
 
@@ -82,6 +83,7 @@ async def build_agent():
         "get_team_info": "Get basic information for a team by name.",
         "get_live_match_for_team": "Check whether a team currently has a live match.",
         "predict_match_outcome": "Predict the outcome and betting probabilities for a match between two teams.",
+        "get_league_scorers": "Get the top 10 scorers for a league.",
     }
     for tool in tools:
         if getattr(tool, "name", None) in short_descriptions:

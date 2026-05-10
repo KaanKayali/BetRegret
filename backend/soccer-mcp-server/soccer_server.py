@@ -2,6 +2,7 @@ from mcp.server.fastmcp import FastMCP
 import time
 import signal
 import sys
+import math
 from pydantic import BaseModel, Field, field_validator, ValidationError
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
@@ -249,6 +250,35 @@ def _get_team_standings_data(team_name: str, headers: Dict[str, str], base_url: 
                             "league_name": comp['name']
                         }
     return None
+
+
+@mcp.tool()
+def get_league_scorers(league_id: int) -> Dict[str, Any]:
+    """Retrieves the top scorers for a given league.
+    
+    Args:
+        league_id (int): The ID of the league (e.g., 2021 for Premier League).
+        
+    Returns:
+        Dict[str, Any]: A list of top scorers with their team and goal count.
+    """
+    api_key = os.getenv("FOOTBALL_DATA_API_KEY")
+    headers = {"X-Auth-Token": api_key}
+    base_url = "https://api.football-data.org/v4"
+    
+    try:
+        data = _fetch_json(f"{base_url}/competitions/{league_id}/scorers", headers)
+        scorers = []
+        for s in data.get('scorers', [])[:10]: # Top 10
+            scorers.append({
+                "player": s['player']['name'],
+                "team": s['team']['name'],
+                "goals": s['goals'],
+                "assists": s.get('assists', 0)
+            })
+        return {"scorers": scorers}
+    except Exception as e:
+        return {"error": f"Could not fetch scorers: {e}"}
 
 
 @mcp.tool()
@@ -1139,7 +1169,6 @@ def predict_match_outcome(team_home_name: str, team_away_name: str) -> Dict[str,
     Returns:
         Dict[str, Any]: A dictionary containing probabilities, analysis, and a betting recommendation.
     """
-    start_time = time.time()
     api_key = os.getenv("FOOTBALL_DATA_API_KEY")
     if not api_key:
         return {"error": "FOOTBALL_DATA_API_KEY environment variable not set."}
@@ -1153,7 +1182,7 @@ def predict_match_outcome(team_home_name: str, team_away_name: str) -> Dict[str,
         if not home_stats:
             return {"error": f"Could not find league stats for home team: {team_home_name}"}
 
-        # Wartepause zwischen den Teams (Sequential Polling)
+        # Wartepause zwischen den Teams
         print("Waiting 20s before processing away team...", file=sys.stderr)
         time.sleep(20)
 
@@ -1166,21 +1195,26 @@ def predict_match_outcome(team_home_name: str, team_away_name: str) -> Dict[str,
         def calc_metrics(stats):
             played = stats['playedGames']
             if played == 0:
-                return 1.0, 0.0 # Default base stats for new season
+                return 1.0, 0.0, 1.0, 1.0 # Default base stats
             ppg = stats['points'] / played
             gdpg = stats['goalDifference'] / played
-            return ppg, gdpg
+            gfpg = stats['goalsFor'] / played # Goals For Per Game (Attack)
+            gapg = stats['goalsAgainst'] / played # Goals Against Per Game (Defense)
+            return ppg, gdpg, gfpg, gapg
 
-        ppg_h, gdpg_h = calc_metrics(home_stats)
-        ppg_a, gdpg_a = calc_metrics(away_stats)
+        ppg_h, gdpg_h, gf_h, ga_h = calc_metrics(home_stats)
+        ppg_a, gdpg_a, gf_a, ga_a = calc_metrics(away_stats)
 
-        # Basic score based on PPG (weight 70%) and GDPG (weight 30%)
-        # Normalizing PPG to a 0-1 scale (approx 3.0 is max)
-        score_h = (ppg_h * 0.7) + (gdpg_h * 0.3) + 0.2 # +0.2 for home advantage
+        # Power Score (70% Form/Punkte, 30% Tordifferenz)
+        score_h = (ppg_h * 0.7) + (gdpg_h * 0.3) + 0.2 # Heimvorteil
         score_a = (ppg_a * 0.7) + (gdpg_a * 0.3)
 
+        # Erwartete Tore (basierend auf Angriff vs. Abwehr des Gegners)
+        # Ein Team erzielt Tore basierend auf seiner Angriffsstärke und der Schwäche der gegnerischen Abwehr
+        exp_goals_h = (gf_h * 0.6) + (ga_a * 0.4) + 0.1
+        exp_goals_a = (gf_a * 0.6) + (ga_h * 0.4)
+
         # Wahrscheinlichkeiten berechnen (Sigmoid-Modell)
-        import math
         diff = score_h - score_a
         
         # Win Probabilities (simplified model)
@@ -1191,10 +1225,19 @@ def predict_match_outcome(team_home_name: str, team_away_name: str) -> Dict[str,
         # If teams are very close, draw is more likely
         draw_factor = 0.25 * math.exp(-abs(diff) * 2)
         
-        # Redistribute
+        # Wahrscheinlichkeiten berechnen
         p_win_h = round(prob_h * (1 - draw_factor) * 100, 1)
         p_win_a = round(prob_a * (1 - draw_factor) * 100, 1)
         p_draw = round(draw_factor * 100, 1)
+
+        # Ergebnisvorhersage (realistisch gerundet basierend auf exp_goals)
+        expected_h = round(exp_goals_h)
+        expected_a = round(exp_goals_a)
+        
+        # Verhindere identische Vorhersagen bei Leistungsunterschieden
+        if expected_h == expected_a and abs(diff) > 0.5:
+            if diff > 0: expected_h += 1
+            else: expected_a += 1
 
         recommendation = "Home Win" if p_win_h > p_win_a + 10 else ("Away Win" if p_win_a > p_win_h + 10 else "Draw / Close Match")
 
@@ -1202,6 +1245,7 @@ def predict_match_outcome(team_home_name: str, team_away_name: str) -> Dict[str,
             "prediction": {
                 "home_team": home_stats['team_name'],
                 "away_team": away_stats['team_name'],
+                "expected_score": f"{expected_h}-{expected_a}",
                 "probabilities": {
                     "home_win": f"{p_win_h}%",
                     "draw": f"{p_draw}%",
@@ -1211,10 +1255,13 @@ def predict_match_outcome(team_home_name: str, team_away_name: str) -> Dict[str,
                 "analysis": {
                     "home_league": home_stats['league_name'],
                     "home_ppg": round(ppg_h, 2),
+                    "home_gfpg": round(gf_h, 2),
+                    "home_gapg": round(ga_h, 2),
                     "away_league": away_stats['league_name'],
-                    "away_ppg": round(ppg_a, 2)
-                },
-                "execution_time_seconds": round(time.time() - start_time, 2)
+                    "away_ppg": round(ppg_a, 2),
+                    "away_gfpg": round(gf_a, 2),
+                    "away_gapg": round(ga_a, 2)
+                }
             }
         }
 
