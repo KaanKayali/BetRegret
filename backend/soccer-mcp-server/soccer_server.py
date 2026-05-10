@@ -182,8 +182,8 @@ def _find_best_team(team_name: str, headers: Dict[str, str], base_url: str, team
         return TEAM_ID_CACHE[query]
 
     if teams is None:
-        print(f"Waiting 60s before searching for team: {team_name}...", file=sys.stderr)
-        time.sleep(60)
+        print(f"Waiting 20s before searching for team: {team_name}...", file=sys.stderr)
+        time.sleep(20)
         teams = _get_team_search_results(team_name, headers, base_url)
     if not teams:
         return None
@@ -204,8 +204,8 @@ def _get_team_standings_data(team_name: str, headers: Dict[str, str], base_url: 
     team_id = team['id']
     
     # Wartepause um Rate-Limits der API zu vermeiden
-    print(f"Waiting 60s before fetching team data for {team_name}...", file=sys.stderr)
-    time.sleep(60)
+    print(f"Waiting 20s before fetching team data for {team_name}...", file=sys.stderr)
+    time.sleep(20)
 
     # Wettbewerbe des Teams abrufen
     if team_id in TEAM_FULL_DATA_CACHE:
@@ -215,8 +215,8 @@ def _get_team_standings_data(team_name: str, headers: Dict[str, str], base_url: 
         TEAM_FULL_DATA_CACHE[team_id] = team_data
     
     # Erneute Pause
-    print(f"Waiting 60s before fetching standings...", file=sys.stderr)
-    time.sleep(60)
+    print(f"Waiting 20s before fetching standings...", file=sys.stderr)
+    time.sleep(20)
 
     # Erste verfügbare Liga mit Tabelle finden
     for comp in team_data.get('runningCompetitions', []):
@@ -1154,8 +1154,8 @@ def predict_match_outcome(team_home_name: str, team_away_name: str) -> Dict[str,
             return {"error": f"Could not find league stats for home team: {team_home_name}"}
 
         # Wartepause zwischen den Teams (Sequential Polling)
-        print("Waiting 60s before processing away team...", file=sys.stderr)
-        time.sleep(60)
+        print("Waiting 20s before processing away team...", file=sys.stderr)
+        time.sleep(20)
 
         # Auswärtsteam-Statistiken laden
         away_stats = _get_team_standings_data(team_away_name, headers, base_url)

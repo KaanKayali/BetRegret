@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sys
+import time
 from datetime import datetime
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -93,11 +94,13 @@ async def build_agent():
         tools=tools,
         system_prompt=(
             f"You are a knowledgeable football assistant. Today's date is {current_date_str}. Use the provided soccer_server tools to answer questions about football teams, live matches, fixtures, and league data."
+            "CRITICAL: The football-data.org API uses the STARTING YEAR as the season ID. Today is 2026-05-10, so the current season is 2025/2026. Therefore, use 2025 as the 'season' parameter for current league fixtures or standings."
             "When the user mentions a team name, interpret it correctly and call the tool with the most likely official team name."
             "For example: 'Bayern Munich' should be searched as 'FC Bayern München', 'Man City' as 'Manchester City', 'PSG' as 'Paris Saint-Germain', etc."
             "If a tool call fails or returns an error (like 429 rate limit), explain the error to the user and suggest they try again later."
             "Always be precise about team names and league information. If unsure about a team name, explain to the user and ask for clarification."
-            "if you dont find the answer from the tools then say that you are not able to find the answer from the tools"
+            "if you dont find the answer from the tools then say that you are not able to find the answer from the tools and then try to find the answer from your own internal knowledge base and try to be precise so the user can win with your betting predictions but first always try to find the answer from the tools"
+            "if it is a prediction then only give one score instead of multiple probalitys or odds. Explain precisely your prediction and why you made that prediction to the user. Give the details the tools gave you."
             "list the used tool names for each prompt after every response"
         ),
     )
@@ -117,13 +120,22 @@ async def chat_endpoint(req: ChatRequest):
         elif msg.role == "AIMessage":
             lc_messages.append(AIMessage(content=msg.content))
 
+    start_time = time.time()
+    
     # Monitoring via Langfuse
     langfuse_handler = CallbackHandler()
     answer = await agent.ainvoke(
         {"messages": lc_messages},
         config={"callbacks": [langfuse_handler]}
     )
-    return ChatResponse(reply=answer["messages"][-1].content)
+    
+    end_time = time.time()
+    duration = round(end_time - start_time, 2)
+    
+    reply = answer["messages"][-1].content
+    reply_with_time = f"{reply}\n\n*(Generation Time: {duration} seconds)*"
+    
+    return ChatResponse(reply=reply_with_time)
 
 if __name__ == "__main__":
     import uvicorn
