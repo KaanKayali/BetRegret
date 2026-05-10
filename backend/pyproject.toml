@@ -19,6 +19,8 @@ dependencies = [
     "pandas",
     "pydantic",
     "langfuse>=4.5.1",
+    "fastmcp>=3.2.4",
+    "langchain-community>=0.4.1",
 ]
 
 [project.scripts]

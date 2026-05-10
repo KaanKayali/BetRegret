@@ -47,12 +47,22 @@ async def build_agent():
     if not openai_api_key or not football_data_api_key:
         raise ValueError("OPENAI_API_KEY and FOOTBALL_DATA_API_KEY must be set")
 
+    base_dir = os.path.abspath(os.path.dirname(__file__))
+    soccer_script = os.path.join(base_dir, "soccer-mcp-server", "soccer_server.py")
+    custom_script = os.path.join(base_dir, "custom-mcp-server", "regulations_server.py")
+
     client: MultiServerMCPClient = MultiServerMCPClient({
         "soccer_server": {
             "transport": "stdio",
             "command": sys.executable,
-            "args": ["./soccer-mcp-server/soccer_server.py"],
+            "args": [soccer_script],
             "env": {"FOOTBALL_DATA_API_KEY": football_data_api_key},
+        },
+        "custom_server": {
+            "transport": "stdio",
+            "command": sys.executable,
+            "args": [custom_script],
+            "env": {"OPENAI_API_KEY": openai_api_key}
         }
     })
 
@@ -63,6 +73,7 @@ async def build_agent():
         "get_team_fixtures",
         "get_team_info",
         "get_live_match_for_team",
+        "get_regulation"
     }
     tools = [tool for tool in tools if getattr(tool, "name", None) in allowed_tool_names]
 
