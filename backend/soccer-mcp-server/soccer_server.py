@@ -52,9 +52,6 @@ TEAM_FULL_DATA_CACHE: Dict[int, Dict[str, Any]] = {}
 STANDINGS_DATA_CACHE: Dict[int, Dict[str, Any]] = {}
 
 
-# Teamnamen normalisieren (Kleinbuchstaben, Sonderzeichen entfernen)
-import unicodedata
-
 def _normalize_string(value: Optional[str]) -> str:
     """Bereitet einen String für den Vergleich vor (Kleinbuchstaben, keine Sonderzeichen, keine FC-Kürzel)."""
     if not value:
@@ -204,22 +201,19 @@ def _get_team_standings_data(team_name: str, headers: Dict[str, str], base_url: 
         return None
     
     team_id = team['id']
-    
-    # Wartepause um Rate-Limits der API zu vermeiden
-    print(f"Waiting 20s before fetching team data for {team_name}...", file=sys.stderr)
-    time.sleep(20)
 
     # Wettbewerbe des Teams abrufen
     if team_id in TEAM_FULL_DATA_CACHE:
+        print(f"[CACHE HIT] Team data for {team_name}", file=sys.stderr)
         team_data = TEAM_FULL_DATA_CACHE[team_id]
     else:
+        # Nur warten, wenn wir wirklich ins Netz müssen
+        print(f"[API REQUEST] Fetching team data for {team_name}...", file=sys.stderr)
+        print(f"Waiting 20s before fetching team data for {team_name}...", file=sys.stderr)
+        time.sleep(20)
         team_data = _fetch_json(f"{base_url}/teams/{team_id}", headers)
         TEAM_FULL_DATA_CACHE[team_id] = team_data
     
-    # Erneute Pause
-    print(f"Waiting 20s before fetching standings...", file=sys.stderr)
-    time.sleep(20)
-
     # Erste verfügbare Liga mit Tabelle finden
     for comp in team_data.get('runningCompetitions', []):
         if comp.get('type') not in ['LEAGUE', 'CUP']: # We prefer leagues for better stats
@@ -227,8 +221,13 @@ def _get_team_standings_data(team_name: str, headers: Dict[str, str], base_url: 
             
         comp_id = comp['id']
         if comp_id in STANDINGS_DATA_CACHE:
+            print(f"[CACHE HIT] Standings for competition {comp_id}", file=sys.stderr)
             standings = STANDINGS_DATA_CACHE[comp_id]
         else:
+            # Nur warten, wenn wir wirklich ins Netz müssen
+            print(f"[API REQUEST] Fetching standings for {comp_id}...", file=sys.stderr)
+            print(f"Waiting 20s before fetching standings...", file=sys.stderr)
+            time.sleep(20)
             try:
                 standings = _fetch_json(f"{base_url}/competitions/{comp_id}/standings", headers)
                 STANDINGS_DATA_CACHE[comp_id] = standings
@@ -1182,10 +1181,6 @@ def predict_match_outcome(team_home_name: str, team_away_name: str) -> Dict[str,
         home_stats = _get_team_standings_data(team_home_name, headers, base_url)
         if not home_stats:
             return {"error": f"Could not find league stats for home team: {team_home_name}"}
-
-        # Wartepause zwischen den Teams
-        print("Waiting 20s before processing away team...", file=sys.stderr)
-        time.sleep(20)
 
         # Auswärtsteam-Statistiken laden
         away_stats = _get_team_standings_data(team_away_name, headers, base_url)

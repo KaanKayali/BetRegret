@@ -102,8 +102,8 @@ async def build_agent():
             "If a tool call fails or returns an error (like 429 rate limit), explain the error to the user and suggest they try again later."
             "Always be precise about team names and league information. If unsure about a team name, explain to the user and ask for clarification."
             "if you dont find the answer from the tools then say that you are not able to find the answer from the tools and then try to find the answer from your own internal knowledge base and try to be precise so the user can win with your betting predictions but first always try to find the answer from the tools"
-            "if it is a prediction then only give one score instead of multiple probalitys or odds. Explain precisely your prediction and why you made that prediction to the user. Give the details the tools gave you."
-            "list the used tool names for each prompt after every response"
+            "if it is a prediction then only give one score instead of multiple probalitys or odds. Explain precisely your prediction and why you made that prediction to the user."
+            "CRITICAL: At the very end of your response, you MUST list the names of the tools you used in this format: 'Used Tools: [tool_name1, tool_name2]'. Always do this, even if you only used one tool or if you answered from cache."
         ),
     )
 
