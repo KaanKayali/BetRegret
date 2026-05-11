@@ -53,37 +53,38 @@ STANDINGS_DATA_CACHE: Dict[int, Dict[str, Any]] = {}
 
 
 # Teamnamen normalisieren (Kleinbuchstaben, Sonderzeichen entfernen)
-def _normalize_team_name(team_name: str) -> str:
-    normalized = team_name.strip().lower()
-    normalized = unicodedata.normalize("NFKD", normalized)
-    normalized = normalized.encode("ascii", "ignore").decode("ascii")
-    normalized = re.sub(r"[^a-z0-9 ]+", "", normalized)
-    normalized = re.sub(r"\b(fc|afc|cf|ac|a\.c\.)\b", "", normalized)
-    return re.sub(r"\s+", " ", normalized).strip()
+import unicodedata
 
-
-def _normalize_team_string(value: Optional[str]) -> str:
+def _normalize_string(value: Optional[str]) -> str:
+    """Bereitet einen String für den Vergleich vor (Kleinbuchstaben, keine Sonderzeichen, keine FC-Kürzel)."""
     if not value:
         return ""
+
     normalized = value.strip().lower()
+
+    # Akzente entfernen
     normalized = unicodedata.normalize("NFKD", normalized)
     normalized = normalized.encode("ascii", "ignore").decode("ascii")
+
+    # Sonderzeichen entfernen
     normalized = re.sub(r"[^a-z0-9 ]+", "", normalized)
-    normalized = re.sub(r"\b(fc|afc|cf|ac|a\.c\.)\b", "", normalized)
+    # Fussball-Kürzel entfernen
+    normalized = re.sub(r"\b(fc|afc|cf|ac|a\.c\.|ssc|as|rb|rsc|vfl|bvb)\b", "", normalized)
+    # Doppelte Leerzeichen normalisieren
     return re.sub(r"\s+", " ", normalized).strip()
 
 
 def _team_matches_query(team: Dict[str, Any], query: str) -> bool:
-    name = _normalize_team_string(team.get("name"))
-    short_name = _normalize_team_string(team.get("shortName"))
-    tla = _normalize_team_string(team.get("tla"))
+    name = _normalize_string(team.get("name"))
+    short_name = _normalize_string(team.get("shortName"))
+    tla = _normalize_string(team.get("tla"))
     return query == name or query == short_name or query == tla
 
 
 def _team_contains_query(team: Dict[str, Any], query: str) -> bool:
-    name = _normalize_team_string(team.get("name"))
-    short_name = _normalize_team_string(team.get("shortName"))
-    tla = _normalize_team_string(team.get("tla"))
+    name = _normalize_string(team.get("name"))
+    short_name = _normalize_string(team.get("shortName"))
+    tla = _normalize_string(team.get("tla"))
     return query in name or query in short_name or query == tla
 
 
@@ -119,7 +120,7 @@ def _get_competitions(headers: Dict[str, str], base_url: str) -> Dict[str, Any]:
 
 
 def _get_team_search_results(team_name: str, headers: Dict[str, str], base_url: str) -> List[Dict[str, Any]]:
-    query = _normalize_team_name(team_name)
+    query = _normalize_string(team_name)
     if not query:
         return []
 
@@ -153,9 +154,9 @@ def _get_team_search_results(team_name: str, headers: Dict[str, str], base_url: 
 
 
 def _score_team_match(team: Dict[str, Any], query: str) -> int:
-    name = _normalize_team_string(team.get("name"))
-    short_name = _normalize_team_string(team.get("shortName"))
-    tla = _normalize_team_string(team.get("tla"))
+    name = _normalize_string(team.get("name"))
+    short_name = _normalize_string(team.get("shortName"))
+    tla = _normalize_string(team.get("tla"))
     score = 0
 
     if query == tla:
@@ -175,7 +176,7 @@ def _score_team_match(team: Dict[str, Any], query: str) -> int:
 
 # Bestes passendes Team aus Suchergebnissen finden
 def _find_best_team(team_name: str, headers: Dict[str, str], base_url: str, teams: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
-    query = _normalize_team_name(team_name)
+    query = _normalize_string(team_name)
     if not query:
         return None
 
@@ -1191,76 +1192,75 @@ def predict_match_outcome(team_home_name: str, team_away_name: str) -> Dict[str,
         if not away_stats:
             return {"error": f"Could not find league stats for away team: {team_away_name}"}
 
-        # Berechnungslogik (PPG und Torverhältnis)
-        def calc_metrics(stats):
-            played = stats['playedGames']
-            if played == 0:
-                return 1.0, 0.0, 1.0, 1.0 # Default base stats
-            ppg = stats['points'] / played
-            gdpg = stats['goalDifference'] / played
-            gfpg = stats['goalsFor'] / played # Goals For Per Game (Attack)
-            gapg = stats['goalsAgainst'] / played # Goals Against Per Game (Defense)
-            return ppg, gdpg, gfpg, gapg
+        # Calculation logic (average values per game)
+        def calculate_team_metrics(stats):
+            games_played = stats['playedGames']
+            if games_played == 0:
+                return 1.0, 0.0, 1.0, 1.0 # Default stats for a new season
+            
+            avg_points_per_game = stats['points'] / games_played
+            avg_goal_diff_per_game = stats['goalDifference'] / games_played
+            avg_goals_scored_per_game = stats['goalsFor'] / games_played
+            avg_goals_conceded_per_game = stats['goalsAgainst'] / games_played
+            return avg_points_per_game, avg_goal_diff_per_game, avg_goals_scored_per_game, avg_goals_conceded_per_game
 
-        ppg_h, gdpg_h, gf_h, ga_h = calc_metrics(home_stats)
-        ppg_a, gdpg_a, gf_a, ga_a = calc_metrics(away_stats)
+        ppg_home, gd_home, goals_home_avg, conceded_home_avg = calculate_team_metrics(home_stats)
+        ppg_away, gd_away, goals_away_avg, conceded_away_avg = calculate_team_metrics(away_stats)
 
-        # Power Score (70% Form/Punkte, 30% Tordifferenz)
-        score_h = (ppg_h * 0.7) + (gdpg_h * 0.3) + 0.2 # Heimvorteil
-        score_a = (ppg_a * 0.7) + (gdpg_a * 0.3)
+        # Power Score (70% Form/Points, 30% Goal Difference) + Home Advantage
+        power_score_home = (ppg_home * 0.7) + (gd_home * 0.3) + 0.2
+        power_score_away = (ppg_away * 0.7) + (gd_away * 0.3)
 
-        # Erwartete Tore (basierend auf Angriff vs. Abwehr des Gegners)
-        # Ein Team erzielt Tore basierend auf seiner Angriffsstärke und der Schwäche der gegnerischen Abwehr
-        exp_goals_h = (gf_h * 0.6) + (ga_a * 0.4) + 0.1
-        exp_goals_a = (gf_a * 0.6) + (ga_h * 0.4)
+        # Expected Goals (based on attack vs. opponent's defense)
+        expected_goals_home = (goals_home_avg * 0.6) + (conceded_away_avg * 0.4) + 0.1
+        expected_goals_away = (goals_away_avg * 0.6) + (conceded_home_avg * 0.4)
 
-        # Wahrscheinlichkeiten berechnen (Sigmoid-Modell)
-        diff = score_h - score_a
+        # Calculate probabilities (Sigmoid model)
+        strength_diff = power_score_home - power_score_away
         
-        # Win Probabilities (simplified model)
-        prob_h = 1 / (1 + math.exp(-diff))
-        prob_a = 1 - prob_h
+        # Base win probabilities
+        prob_win_base_home = 1 / (1 + math.exp(-strength_diff))
+        prob_win_base_away = 1 - prob_win_base_home
         
-        # Add a draw probability (usually around 20-30%)
-        # If teams are very close, draw is more likely
-        draw_factor = 0.25 * math.exp(-abs(diff) * 2)
+        # Draw factor (higher when teams are equally strong)
+        draw_factor = 0.25 * math.exp(-abs(strength_diff) * 2)
         
-        # Wahrscheinlichkeiten berechnen
-        p_win_h = round(prob_h * (1 - draw_factor) * 100, 1)
-        p_win_a = round(prob_a * (1 - draw_factor) * 100, 1)
-        p_draw = round(draw_factor * 100, 1)
+        # Final probabilities in percent
+        prob_home_percent = round(prob_win_base_home * (1 - draw_factor) * 100, 1)
+        prob_away_percent = round(prob_win_base_away * (1 - draw_factor) * 100, 1)
+        prob_draw_percent = round(draw_factor * 100, 1)
 
-        # Ergebnisvorhersage (realistisch gerundet basierend auf exp_goals)
-        expected_h = round(exp_goals_h)
-        expected_a = round(exp_goals_a)
+        # Score prediction (realistically rounded)
+        predicted_score_home = round(expected_goals_home)
+        predicted_score_away = round(expected_goals_away)
         
-        # Verhindere identische Vorhersagen bei Leistungsunterschieden
-        if expected_h == expected_a and abs(diff) > 0.5:
-            if diff > 0: expected_h += 1
-            else: expected_a += 1
+        # Prevent identical scores if there is a significant strength difference
+        if predicted_score_home == predicted_score_away and abs(strength_diff) > 0.5:
+            if strength_diff > 0: predicted_score_home += 1
+            else: predicted_score_away += 1
 
-        recommendation = "Home Win" if p_win_h > p_win_a + 10 else ("Away Win" if p_win_a > p_win_h + 10 else "Draw / Close Match")
+        recommendation = "Home Win" if prob_home_percent > prob_away_percent + 10 else ("Away Win" if prob_away_percent > prob_home_percent + 10 else "Draw / Close Match")
 
         return {
             "prediction": {
                 "home_team": home_stats['team_name'],
                 "away_team": away_stats['team_name'],
-                "expected_score": f"{expected_h}-{expected_a}",
+                "expected_score": f"{predicted_score_home}-{predicted_score_away}",
                 "probabilities": {
-                    "home_win": f"{p_win_h}%",
-                    "draw": f"{p_draw}%",
-                    "away_win": f"{p_win_a}%"
+                    "home_win": f"{prob_home_percent}%",
+                    "draw": f"{prob_draw_percent}%",
+                    "away_win": f"{prob_away_percent}%"
                 },
                 "recommendation": recommendation,
                 "analysis": {
                     "home_league": home_stats['league_name'],
-                    "home_ppg": round(ppg_h, 2),
-                    "home_gfpg": round(gf_h, 2),
-                    "home_gapg": round(ga_h, 2),
+                    "home_ppg": round(ppg_home, 2),
+                    "home_gfpg": round(goals_home_avg, 2),
+                    "home_gapg": round(conceded_home_avg, 2),
                     "away_league": away_stats['league_name'],
-                    "away_ppg": round(ppg_a, 2),
-                    "away_gfpg": round(gf_a, 2),
-                    "away_gapg": round(ga_a, 2)
+                    "away_ppg": round(ppg_away, 2),
+                    "away_gfpg": round(goals_away_avg, 2),
+                    "away_gapg": round(conceded_away_avg, 2)
                 }
             }
         }

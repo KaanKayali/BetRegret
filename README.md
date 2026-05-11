@@ -27,7 +27,7 @@ Unsere Entwicklung baute schrittweise aufeinander auf:
     *   Anpassung des Backends, um Listen von Nachrichten zu akzeptieren.
     *   Anpassung des Frontends (`App.js`), sodass der gesamte Chat-Verlauf bei jedem Request mitgesendet wird.
 5.  **Monitoring mit Langfuse**:
-    *   Als finalen Schritt (gemäß Exercise 2) haben wir Langfuse für das Tracing integriert, um Tool-Aufrufe, Token-Verbrauch und Prompt-Verläufe genau analysieren zu können.
+    *   Als finalen Schritt (gemäss Exercise 2) haben wir Langfuse für das Tracing integriert, um Tool-Aufrufe, Token-Verbrauch und Prompt-Verläufe genau analysieren zu können.
 
 ## Getroffene Entscheidungen & Implementierungsdetails
 

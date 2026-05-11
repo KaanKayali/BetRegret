@@ -90,7 +90,7 @@ async def build_agent():
             tool.description = short_descriptions[tool.name]
 
     current_date_str = datetime.now().strftime("%Y-%m-%d")
-    llm: ChatOpenAI = ChatOpenAI(model="gpt-4.1", api_key=openai_api_key)
+    llm: ChatOpenAI = ChatOpenAI(model="gpt-4o", api_key=openai_api_key)
     return create_agent(
         model=llm,
         tools=tools,
