@@ -184,19 +184,38 @@ FOOTBALL_DATA_API_KEY="football-data-key"
 
 BetRegret wurde im Team entwickelt. Wir arbeiten mit separaten Feature-Branches und Bugfix-Branches, prüfen Änderungen per Review und mergen erst in `main`, wenn der Code stabil und getestet ist. Dieser Branch-basierte Workflow hilft, parallel zu entwickeln und Konflikte kontrolliert zu lösen.
 
-## Tests
 
-Die vorhandenen Tests sind sinnvoll und prüfen wichtige Kernfunktionen des MCP-Servers:
+## Tests & Evaluation
 
-- `backend/tests/test_soccer_server_unit.py` prüft Namensnormalisierung, Team-Matching und Score-Extraktion.
-- `backend/tests/test_soccer_server_mock.py` testet `predict_match_outcome` mit Mock-Statistiken und die Form-Berechnung aus Spielverläufen.
-- `backend/tests/test_main_helpers.py` überprüft Tool-Footer-Parsing und Guard-Logik.
+Das Projekt verfügt über automatisierte Tests zur Qualitätssicherung sowie über ein Evaluationsskript.
 
-Einschränkungen:
+### 1. Unit-Tests
+Die Unit-Tests befinden sich im Verzeichnis `backend/tests/`.
+Zusätzlich zu den grundlegenden Funktionalitäten wurden Tests für Edge-Cases und Fehlerfälle hinzugefügt:
+* **API-Rate-Limiting (`test_fetch_json_rate_limit_retry`):** Verifiziert, dass der Server bei einem HTTP 429 Rate Limit wartet und die Anfrage erfolgreich wiederholt.
+* **Saisonstart (`test_predict_match_outcome_zero_games_played`):** Verhindert Division-by-Zero-Fehler, falls zwei Teams zu Beginn einer neuen Saison noch 0 Spiele absolviert haben.
 
-- Es fehlen Integrationstests gegen die echte API sowie gegen die FastAPI-Endpunkte.
-- Edgecases wie fehlende `runningCompetitions`, kein `TOTAL`-Standing oder problematische Teamnamen sind nicht vollständig abgedeckt.
-- Frontend-Tests sind derzeit nicht vorhanden.
+**Ausführung:**
+Im Ordner `backend/` ausführen:
+```bash
+uv run pytest
+```
+
+### 2. RAG- & Agenten-Evaluation (Ragas)
+Da BetRegret ein tool-basierter Agent (Agentic RAG) ist, wird die Qualität der Antworten und Datenabfragen mithilfe des **Ragas**-Frameworks evaluiert.
+
+Das Skript `backend/eval_bot.py` führt vordefinierte Testanfragen aus (darunter reguläre Fussballfragen sowie Edge-Cases wie Off-Topic-Eingaben) und bewertet diese anhand von zwei primären Ragas-Metriken:
+* **Faithfulness (Glaubwürdigkeit):** Misst, ob der Agent Halluzinationen erzeugt oder sich strikt an die aus den Tools abgerufenen API-Daten hält.
+* **Answer Relevancy (Antwort-Relevanz):** Misst, wie präzise der Agent auf die Frage des Nutzers eingeht.
+
+Zusätzlich wird für jede Anfrage die **Antwortzeit (Latenz)** erfasst. Die Durchschnittswerte werden in der Konsole ausgegeben und detaillierte Einzelergebnisse in `bot_evaluation_results.csv` exportiert.
+
+**Ausführung:**
+Im Ordner `backend/` ausführen:
+```bash
+uv run eval_bot.py
+```
+
 
 ## Bekannte Probleme und technische Erkenntnisse
 
@@ -234,7 +253,7 @@ Im Ordner `frontend/`:
 
 ```bash
 npm install
-npm start
+npm run start
 ```
 
 ### Benötigte Umgebungsvariablen

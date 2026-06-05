@@ -1,0 +1,20 @@
+user_input,retrieved_contexts,response,reference,faithfulness,answer_relevancy,duration_seconds
+Auf welchem Tabellenplatz steht Bayern München?,['Execution failed'],"Error during execution: Error code: 400 - {'error': {'message': ""This model's maximum context length is 128000 tokens. However, your messages resulted in 157316 tokens (157076 in the messages, 240 in the functions). Please reduce the length of the messages or functions."", 'type': 'invalid_request_error', 'param': 'messages', 'code': 'context_length_exceeded'}}",Bayern München steht auf Platz 1 der Bundesliga.,0.16666666666666666,0.6803951850071654,32.88
+Wann ist das nächste Spiel von Real Madrid?,"['[{\'type\': \'text\', \'text\': \'{\\n  ""error"": ""Request failed: 429 Client Error:  for url: https://api.football-data.org/v4/teams?limit=200&offset=0""\\n}\', \'id\': \'lc_76227c66-e17d-48bf-8fa3-4299a44354d8\'}]']","Es gab ein Problem beim Abrufen der Spieldaten für Real Madrid aufgrund eines API-Limitierungsfehlers. Bitte versuchen Sie es später noch einmal. 
+
+Used Tools: [functions.get_team_fixtures]",Das nächste geplante Spiel von Real Madrid.,0.25,0.8565874121714562,48.86
+Wer sind die Top-Scorer der Premier League?,"['[{\'type\': \'text\', \'text\': \'{\\n  ""league_id"": 2021\\n}\', \'id\': \'lc_74566714-d25d-4491-b432-69689ad934bb\'}]', '[{\'type\': \'text\', \'text\': \'{\\n  ""scorers"": [\\n    {\\n      ""player"": ""Erling Haaland"",\\n      ""team"": ""Manchester City FC"",\\n      ""goals"": 27,\\n      ""assists"": 8\\n    },\\n    {\\n      ""player"": ""Thiago Rodrigues"",\\n      ""team"": ""Brentford FC"",\\n      ""goals"": 22,\\n      ""assists"": 1\\n    },\\n    {\\n      ""player"": ""Antoine Semenyo"",\\n      ""team"": ""Manchester City FC"",\\n      ""goals"": 17,\\n      ""assists"": 4\\n    },\\n    {\\n      ""player"": ""Ollie Watkins"",\\n      ""team"": ""Aston Villa FC"",\\n      ""goals"": 16,\\n      ""assists"": 3\\n    },\\n    {\\n      ""player"": ""João Pedro"",\\n      ""team"": ""Chelsea FC"",\\n      ""goals"": 15,\\n      ""assists"": 5\\n    },\\n    {\\n      ""player"": ""Morgan Gibbs-White"",\\n      ""team"": ""Nottingham Forest FC"",\\n      ""goals"": 15,\\n      ""assists"": 5\\n    },\\n    {\\n      ""player"": ""Viktor Gyökeres"",\\n      ""team"": ""Arsenal FC"",\\n      ""goals"": 14,\\n      ""assists"": 1\\n    },\\n    {\\n      ""player"": ""Dominic Calvert-Lewin"",\\n      ""team"": ""Leeds United FC"",\\n      ""goals"": 14,\\n      ""assists"": 1\\n    },\\n    {\\n      ""player"": ""Danny Welbeck"",\\n      ""team"": ""Brighton & Hove Albion FC"",\\n      ""goals"": 13,\\n      ""assists"": 1\\n    },\\n    {\\n      ""player"": ""Eli Kroupi"",\\n      ""team"": ""AFC Bournemouth"",\\n      ""goals"": 13,\\n      ""assists"": null\\n    }\\n  ]\\n}\', \'id\': \'lc_692b0a4a-16b9-4b24-b144-53ac2cbbe248\'}]']","Die aktuellen Top-Scorer der Premier League sind:
+
+1. **Erling Haaland** - Manchester City FC, 27 Tore, 8 Vorlagen
+2. **Thiago Rodrigues** - Brentford FC, 22 Tore, 1 Vorlage
+3. **Antoine Semenyo** - Manchester City FC, 17 Tore, 4 Vorlagen
+4. **Ollie Watkins** - Aston Villa FC, 16 Tore, 3 Vorlagen
+5. **João Pedro** - Chelsea FC, 15 Tore, 5 Vorlagen
+6. **Morgan Gibbs-White** - Nottingham Forest FC, 15 Tore, 5 Vorlagen
+7. **Viktor Gyökeres** - Arsenal FC, 14 Tore, 1 Vorlage
+8. **Dominic Calvert-Lewin** - Leeds United FC, 14 Tore, 1 Vorlage
+9. **Danny Welbeck** - Brighton & Hove Albion FC, 13 Tore, 1 Vorlage
+10. **Eli Kroupi** - AFC Bournemouth, 13 Tore
+
+Used Tools: [functions.get_league_id_by_name, functions.get_league_scorers]",Die Top-Scorer der Premier League Liga mit ihren erzielten Toren.,1.0,0.9144730172029543,19.3
+Gib mir ein Rezept für einen Käsekuchen.,['No tools were used. Answer generated from internal knowledge or blocked by guard.'],Dieser Assistent kann nur Fußballthemen behandeln.,Der Assistent kann nur fussballbezogene Fragen beantworten.,0.0,0.7247128056912823,3.51

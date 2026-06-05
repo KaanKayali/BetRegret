@@ -92,3 +92,67 @@ def test_predict_match_outcome_uses_mocked_table_data(monkeypatch):
 
     assert round(home_win + draw + away_win, 1) == 100.0
     assert prediction["expected_score"].count("-") == 1
+
+
+def test_fetch_json_rate_limit_retry(monkeypatch):
+    """
+    Test that _fetch_json retries successfully when encountering a 429 rate limit.
+    """
+    import requests
+
+    calls = 0
+
+    class MockResponse:
+        def __init__(self, status_code, json_data):
+            self.status_code = status_code
+            self._json_data = json_data
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise requests.exceptions.HTTPError(response=self)
+
+        def json(self):
+            return self._json_data
+
+    def mock_get(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return MockResponse(429, {})
+        return MockResponse(200, {"teams": [{"id": 1, "name": "Arsenal FC"}]})
+
+    monkeypatch.setattr(soccer_server.time, "sleep", lambda x: None)
+    monkeypatch.setattr(soccer_server.REQUEST_SESSION, "get", mock_get)
+
+    headers = {"X-Auth-Token": "test"}
+    res = soccer_server._fetch_json("https://api.fake.com", headers)
+    
+    assert res == {"teams": [{"id": 1, "name": "Arsenal FC"}]}
+    assert calls == 2
+
+
+def test_predict_match_outcome_zero_games_played(monkeypatch):
+    """
+    Test that predict_match_outcome handles teams with zero games played (new season)
+    without raising a division by zero error.
+    """
+    def fake_zero_games_stats(team_name, headers, base_url, team=None):
+        return {
+            "team_name": team_name,
+            "team_id": 1,
+            "position": 1,
+            "playedGames": 0,
+            "points": 0,
+            "goalsFor": 0,
+            "goalsAgainst": 0,
+            "goalDifference": 0,
+            "league_name": "Test League",
+        }
+
+    monkeypatch.setattr(soccer_server, "_get_team_standings_data", fake_zero_games_stats)
+    
+    result = soccer_server.predict_match_outcome("Team A", "Team B")
+    assert "prediction" in result
+    assert result["prediction"]["expected_score"] == "1-1"
+
+
