@@ -1,95 +1,187 @@
-# BetRegret - Intelligenter Fussball-Chatbot
+# BetRegret
 
-BetRegret ist ein Chatbot, der Fragen rund um den internationalen Fussball, Ligen, Teams und Live-Spiele beantworten kann. Das Projekt ist aus den Anforderungen des Kurses "Hands on Chatbots" entstanden.
+BetRegret ist ein Fussball-Chatbot, der Fragen zu Teams, Ligen, Fixtures, Live-Spielen und Wettprognosen beantwortet.
 
-## Idee & Projektauftrag
+## Ziel des Projekts
 
-Die Inspiration für BetRegret kam von unserem Intresse an Fussball.
+Das Ziel ist ein Fussball-Assistent, der möglichst nah an echten Daten arbeitet und nicht einfach freie Antworten erfindet. Der Bot soll:
 
-Das Ziel war eine saubere Trennung: Ein ansprechendes React-Frontend für den Benutzer, ein FastAPI-Backend für die Agentenlogik und ein abgetrennter MCP-Server als Quelle für die Informationen und Daten.
+- Fussballfragen mit aktuellen Daten beantworten
+- Informationen zu Teams, Ligen und Spielen finden
+- Vorhersagen auf Basis nachvollziehbarer Signale berechnen
+- bei Unsicherheit sagen, warum eine Frage nicht sauber mit den vorhandenen Tools beantwortbar ist
+- den gesamten Chatverlauf fuer Folgefragen behalten
+- den Weg von der Nutzerfrage bis zur Antwort nachvollziehbar machen
 
-## Ablauf
+## Gesamtidee und Architektur
 
-Unsere Entwicklung baute schrittweise aufeinander auf:
+```mermaid
+flowchart LR
+    U["User im Browser"] --> F["React Frontend"]
+    F --> B["FastAPI Backend"]
+    B --> A["LangChain Agent"]
+    A --> M["MCP Server"]
+    M --> API["football-data.org API"]
+    A --> B
+    B --> F
+    B --> L["Langfuse"]
+```
 
-1.  **Grundgerüst & Setup**:
-    *   Initialisierung des Backends (FastAPI) und Frontends (React).
-    *   Integration von LangChain und OpenAI als Sprachmodell.
-2.  **Der MCP-Server (`soccer-mcp-server`)**:
-    *   Entwicklung des eigenen MCP-Servers mit `FastMCP`.
-    *   Implementierung der Tools (z.B. `get_league_fixtures`, `get_team_fixtures`, `get_live_match_for_team`).
-3.  **Frontend-Design & UI**:
-    *   Einbau von SASS/SCSS für ein modernes Styling.
-    *   Erstellung von abgetrennten Komponenten (`Chatview`, `Chatfield`, `AIMessage`).
-    *   Einbau von Lade-Animationen (`MessageLoader`) für ein besseres User-Feedback während die API abfragt wird.
-4.  **Refactoring & Kontext-Integration (Gedächtnis)**:
-    *   Umbau der Nachrichten-Logik: Anfänglich war der Bot "amnesisch" (ohne Gedächtnis).
-    *   Anpassung des Backends, um Listen von Nachrichten zu akzeptieren.
-    *   Anpassung des Frontends (`App.js`), sodass der gesamte Chat-Verlauf bei jedem Request mitgesendet wird.
-5.  **Monitoring mit Langfuse**:
-    *   Als finalen Schritt (gemäss Exercise 2) haben wir Langfuse für das Tracing integriert, um Tool-Aufrufe, Token-Verbrauch und Prompt-Verläufe genau analysieren zu können.
+Der Ablauf ist:
 
-## Getroffene Entscheidungen & Implementierungsdetails
+1. Der User schreibt eine Nachricht im Frontend.
+2. Das Frontend sendet den kompletten Chatverlauf an das Backend.
+3. Das Backend wandelt den Verlauf in LangChain-Messages um.
+4. Der Agent entscheidet, welches Tool er braucht.
+5. Der MCP-Server spricht mit der football-data.org API.
+6. Die Antwort aus dem Tool geht zurück an den Agenten.
+7. Der Agent formuliert daraus die Antwort.
+8. Das Backend hngt die Laufzeit an und gibt die Antwort an das Frontend zurück.
 
-Wir haben uns bewusst für bestimmte Architekturen entschieden, um das System robust zu machen:
+Langfuse zeichnet dabei die Agentenläufe und Tool-Nutzung auf.
 
-*   **Agentic RAG statt Vektordatenbank**: Bei Fussballdaten macht eine statische PDF-Vektordatenbank keinen Sinn. Der Agent nutzt stattdessen die `football-data.org` REST API als Datenquelle.
+## Wie die Komponenten zusammenarbeiten
 
-*   **Custom Parser im Frontend**: Anstatt eine schwere Markdown-Bibliothek zu laden, haben wir in der `AIMessage`-Komponente einen eigenen Parser geschrieben, der Listen und Fettdruck (`**Text**`) sauber in HTML rendert.
+Das Projekt hat drei klare Ebenen:
 
-## Probleme & Schwierigkeiten
+- das Frontend
+- das Backend
+- den MCP-Server fuür die eigentlichen Fussballdaten
 
-Auf dem Weg gab es einige technische Hürden, die wir überwinden mussten:
+## Frontend
+`App.js` verwaltet:
 
-*   **Git Merge-Konflikte**: Bei der Zusammenführung der Frontend-Branches (z.B. bei der `postMessage`-Funktion) kam es zu Konflikten in der `App.js` und `Chatfield.jsx`, die Syntaxfehler verursachten und manuell bereinigt werden mussten.
-*   **Chat-Kontext (Memory)**: LangChain speichert den Zustand nicht automatisch, wenn man über eine zustandslose API (REST) kommuniziert. Die Schwierigkeit bestand darin, die React-State-Logik so umzubauen, dass das Frontend als "Gedächtnis" fungiert und das Array asynchron korrekt ans Backend schickt.
+- den Chatverlauf
+- das Eingabefeld
+- den Ladezustand
+- den Request an das Backend
 
-*   **API-Wechsel**: Ursprünglich war geplant, die "API-Football" über RapidAPI zu nutzen. Es stellte sich jedoch heraus, dass diese eine kostenpflichtige Subscription voraussetzte. Wir mussten daher  auf die `football-data.org` API umsteigen. Dies erforderte eine  Anpassung der MCP-Server-Logik in der 'soccer_server.py'-Datei des Repositorys, da die Endpunkte und Datenstrukturen (z.B. Team-IDs und Match-Objekte) unterschiedlich waren.
+Bei jeder neuen Nachricht wird der bisherige Verlauf mitgeschickt. Dadurch kann der Bot Folgefragen im Kontext verstehen.
 
-*   **Striktes Prompt-Engineering**: Das LLM tendierte anfangs dazu, API-Fehler (wie z.B. Rate-Limits der kostenlosen Football-API) zu verschlucken oder falsche Teamnamen direkt an die Tools durchzureichen. Der System-Prompt musste stark angepasst werden, um das Modell zur Selbstkorrektur und zur Ausgabe der genutzten Tools zu zwingen.
+`Chatview.jsx` zeigt die Nachrichten an.
 
-## Setup & Installation
+`Chatfield.jsx` stellt das Eingabefeld und den Send-Button bereit.
 
-Um das Projekt lokal zu starten muss man:
+`AIMessage.jsx` rendert die Modellantworten und unterstuetzt einfache Formatierungen wie Zeilenumbrueche, Listen, Bilder und Hervorhebungen.
 
-### 1. API-Keys besorgen
-
-Bevor du startest, benötigst du einige API-Schlüssel:
-*   **OpenAI API Key**: Für das Sprachmodell (GPT).
-*   **Football-Data API Key**: Für die Livedaten aus dem Fussball [football-data.org](https://www.football-data.org/).
+`MessageLoader.jsx` zeigt den Ladezustand. Das Fussballsymbol ist lokal gespeichert unter `frontend/src/assets/football.png` und wird nicht extern geladen.
 
 
-### 2. Umgebungsvariablen (.env) konfigurieren
+## Backend
+Wichtige Datei:
 
-Navigiere in den `backend` Ordner. Falls nicht vorhanden, erstelle eine Datei namens `.env`. Trage dort die Keys so ein:
+- `backend/main.py`
+
+### Aufgaben von `main.py`
+
+`main.py`:
+
+- startet FastAPI
+- baut den LangChain-Agenten
+- bindet den MCP-Server über `MultiServerMCPClient` ein
+- akzeptiert den Chatverlauf als Request
+- ruft den Agenten auf
+- hängt die Antwortzeit an
+- sendet Langfuse-Callbacks
+- fängt Kontext-Overflow ab
+- prüft tool-freie Antworten mit einem Guard
+
+Der Agent ist so konfiguriert, dass er die Tools zuerst nutzen soll. Erst wenn die Tools keine Antwort liefern können, darf er auf internes Fussballwissen ausweichen.
+
+## MCP-Server und football-data.org
+
+Der MCP-Server liegt in `backend/soccer-mcp-server/soccer_server.py`.
+
+Er kapselt die football-data.org API und stellt dem Agenten klar benannte Tools bereit. Der Agent spricht nicht direkt mit der API, sondern nur mit dem MCP-Server. Das macht das System sauberer und kontrollierbarer.
+
+### Warum der MCP-Server nötig war
+
+Ursprünglich war das Projekt nicht direkt auf football-data.org ausgerichtet. Damit es mit der API funktioniert, mussten mehrere Dinge angepasst werden:
+
+- neue Endpunkte
+- neue Datenstrukturen
+- die Logik für `season`
+- Teamnamens-Normalisierung
+- Fehler- und Rate-Limit-Verhalten
+- Vorhersagelogik hinzugefügt
+
+### Teamnamen normalisieren
+
+Der Benutzer schreibt Teamnamen oft anders als die API es versteht. Darum normalisiert der Server Namen, entfernt Sonderzeichen und gleiche Bedeutungstragende Kürzel. So werden zum Beispiel verschiedene Schreibweisen besser zusammengefuehrt.
+
+### Retry und Rate Limits
+
+Der Server reagiert robuster auf API-Fehler und Rate Limits. Bei 429-Antworten wird erneut versucht, statt sofort aufzugeben.
+
+### Cache
+
+Im MCP-Server gibt es mehrere In-Memory-Caches:
+
+- `TEAM_SEARCH_CACHE`
+- `COMPETITIONS_CACHE`
+- `TEAM_ID_CACHE`
+- `TEAM_FULL_DATA_CACHE`
+- `STANDINGS_DATA_CACHE`
+
+Der Cache spart Zeit, weil wiederholte API-Aufrufe innerhalb derselben Server-Session vermieden werden. Er lebt nur im Speicher und ist nach einem Neustart der Website leer.
+
+## Das Wettentool
+
+Die Funktion `predict_match_outcome` in `backend/soccer-mcp-server/soccer_server.py` bewertet ein Spiel zwischen zwei Teams.
+
+Das Tool liefert:
+
+- ein erwartetes Ergebnis
+- Wahrscheinlichkeiten fuer Heimsieg, Unentschieden und Auswaertssieg
+- eine Empfehlung
+- eine nachvollziehbare Analyse
+
+Die Vorhersage nutzt diese Signale:
+
+- aktuelle Ligadaten aus der Tabelle
+- Punkte pro Spiel
+- Tordifferenz
+- Tore fuer und gegen
+- Heimvorteil
+
+Das Ergebnis ist bewusst einfach gehalten. Es soll keine Blackbox sein, sondern eine kompakte Einschaetzung, die der Chatbot direkt erklaeren kann.
+
+## Guard, Sicherheit und Fehlertoleranz
+
+BetRegret soll möglichst toolbasiert arbeiten. Gleichzeitig braucht das System Schutz, wenn die Tools für eine Frage nicht ausreichen und die AI die Informationen in dem internen Wissen sucht. Dafür gibt es aber ein LLM-as-a-Guard, welche die Antwort der AI überprüft ob sie Fussball relevant ist. So wird vermieden das der User die AI Jailbreaken kann.
+
+### Kontext-Overflow
+
+Wenn eine Frage zuviele Tokens verwendet, fängt das Backend den Fehler ab und gibt eine erklärende Antwort zurück statt eines Serverfehlers. Der Bot sagt dann, dass die Anfrage zu gross für den Modellkontext ist, und nennt sinnvollere Alternativen.
+
+## Langfuse
+
+Langfuse ist im Backend eingebunden, um die Agentenläufe zu beobachten.
+
+## Ausführung und Setup
+
+### Backend starten
+
+Im Ordner `backend/`:
+
+```bash
+uv sync
+uv run main.py
+```
+
+### Frontend starten
+
+Im Ordner `frontend/`:
+
+```bash
+npm install
+npm start
+```
+
+### Benötigte Umgebungsvariablen
 
 ```env
 OPENAI_API_KEY="openai-key"
 FOOTBALL_DATA_API_KEY="football-data-key"
 ```
 
-### 3. Backend starten
-
-Öffne ein Terminal und wechsle in den `backend` Ordner:
-```bash
-cd backend
-```
-Installiere die Abhängigkeiten und starte den Server mit `uv`:
-```bash
-uv sync
-uv run main.py
-```
-*Der FastAPI-Server läuft nun auf `http://127.0.0.1:8000`.*
-
-### 4. Frontend starten
-
-Öffne ein zweites Terminal und wechsle in den `frontend` Ordner:
-```bash
-cd frontend
-```
-Installiere die Node-Pakete und starte die React-App:
-```bash
-npm install
-npm start
-```
-*Die App öffnet sich automatisch in deinem Browser unter `http://localhost:3000`.
