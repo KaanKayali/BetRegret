@@ -1,3 +1,4 @@
+from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 import time
 import signal
@@ -13,6 +14,11 @@ import unicodedata
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
 
 
 # print(f"Python executable: {sys.executable}", file=sys.stderr)
@@ -195,8 +201,9 @@ def _find_best_team(team_name: str, headers: Dict[str, str], base_url: str, team
 
 
 # Tabellendaten eines Teams abrufen (Position, PPG, GD)
-def _get_team_standings_data(team_name: str, headers: Dict[str, str], base_url: str) -> Optional[Dict[str, Any]]:
-    team = _find_best_team(team_name, headers, base_url)
+def _get_team_standings_data(team_name: str, headers: Dict[str, str], base_url: str, team: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    if team is None:
+        team = _find_best_team(team_name, headers, base_url)
     if not team:
         return None
     
@@ -250,6 +257,183 @@ def _get_team_standings_data(team_name: str, headers: Dict[str, str], base_url: 
                             "league_name": comp['name']
                         }
     return None
+
+
+def _resolve_team_for_analysis(team_name: str, headers: Dict[str, str], base_url: str) -> Optional[Dict[str, Any]]:
+    """Resolve a team without the artificial delay used by the generic lookup path."""
+    candidates = _get_team_search_results(team_name, headers, base_url)
+    if not candidates:
+        return None
+    return _find_best_team(team_name, headers, base_url, candidates)
+
+
+def _match_datetime_key(match: Dict[str, Any]) -> datetime:
+    """Sort football-data matches by UTC date, newest first."""
+    raw_date = match.get("utcDate")
+    if not raw_date:
+        return datetime.min
+
+    try:
+        return datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
+    except Exception:
+        return datetime.min
+
+
+def _extract_match_score(match: Dict[str, Any]) -> tuple[Optional[int], Optional[int]]:
+    """Extract a usable scoreline from a football-data match payload."""
+    score = match.get("score") or {}
+    for period in ("fullTime", "regularTime", "halfTime"):
+        period_score = score.get(period) or {}
+        home = period_score.get("home")
+        away = period_score.get("away")
+        if home is not None and away is not None:
+            return home, away
+    return None, None
+
+
+def _safe_average(total: float, count: int, fallback: float = 0.0) -> float:
+    """Return a stable average even when the sample size is zero."""
+    if count <= 0:
+        return fallback
+    return total / count
+
+
+def _build_recent_form(team_name: str, headers: Dict[str, str], base_url: str, team: Optional[Dict[str, Any]] = None, limit: int = 8) -> Optional[Dict[str, Any]]:
+    """Summarize a team's recent finished matches into a compact form profile."""
+    if team is None:
+        team = _resolve_team_for_analysis(team_name, headers, base_url)
+    if not team:
+        return None
+
+    team_id = team["id"]
+    matches_url = f"{base_url}/teams/{team_id}/matches"
+    params = {"status": "FINISHED", "limit": max(limit, 8)}
+
+    try:
+        response = requests.get(matches_url, headers=headers, params=params, timeout=20)
+        response.raise_for_status()
+        matches = sorted(response.json().get("matches", []), key=_match_datetime_key, reverse=True)
+    except Exception:
+        return None
+
+    entries: List[Dict[str, Any]] = []
+    totals = {
+        "points": 0,
+        "goals_for": 0,
+        "goals_against": 0,
+        "wins": 0,
+        "draws": 0,
+        "losses": 0,
+        "home_points": 0,
+        "home_goals_for": 0,
+        "home_goals_against": 0,
+        "home_matches": 0,
+        "away_points": 0,
+        "away_goals_for": 0,
+        "away_goals_against": 0,
+        "away_matches": 0,
+    }
+
+    for match in matches[:limit]:
+        home_team_id = match.get("homeTeam", {}).get("id")
+        away_team_id = match.get("awayTeam", {}).get("id")
+        home_goals, away_goals = _extract_match_score(match)
+        if home_goals is None or away_goals is None:
+            continue
+
+        if team_id == home_team_id:
+            gf, ga = home_goals, away_goals
+            venue = "home"
+            opponent = match.get("awayTeam", {}).get("name")
+        elif team_id == away_team_id:
+            gf, ga = away_goals, home_goals
+            venue = "away"
+            opponent = match.get("homeTeam", {}).get("name")
+        else:
+            continue
+
+        if gf > ga:
+            result = "W"
+            points = 3
+            totals["wins"] += 1
+        elif gf == ga:
+            result = "D"
+            points = 1
+            totals["draws"] += 1
+        else:
+            result = "L"
+            points = 0
+            totals["losses"] += 1
+
+        totals["points"] += points
+        totals["goals_for"] += gf
+        totals["goals_against"] += ga
+
+        if venue == "home":
+            totals["home_points"] += points
+            totals["home_goals_for"] += gf
+            totals["home_goals_against"] += ga
+            totals["home_matches"] += 1
+        else:
+            totals["away_points"] += points
+            totals["away_goals_for"] += gf
+            totals["away_goals_against"] += ga
+            totals["away_matches"] += 1
+
+        entries.append(
+            {
+                "date": match.get("utcDate"),
+                "opponent": opponent,
+                "venue": venue,
+                "result": result,
+                "score": f"{gf}-{ga}",
+            }
+        )
+
+    games = len(entries)
+    if games == 0:
+        return {
+            "team_name": team.get("name"),
+            "team_id": team_id,
+            "matches_considered": 0,
+            "points_per_game": 0.0,
+            "goal_difference_per_game": 0.0,
+            "goals_for_per_game": 0.0,
+            "goals_against_per_game": 0.0,
+            "win_rate": 0.0,
+            "home_points_per_game": 0.0,
+            "away_points_per_game": 0.0,
+            "home_goals_for_per_game": 0.0,
+            "home_goals_against_per_game": 0.0,
+            "away_goals_for_per_game": 0.0,
+            "away_goals_against_per_game": 0.0,
+            "last_results": "",
+            "sample_matches": [],
+        }
+
+    return {
+        "team_name": team.get("name"),
+        "team_id": team_id,
+        "matches_considered": games,
+        "points": totals["points"],
+        "points_per_game": round(_safe_average(totals["points"], games), 2),
+        "goal_difference": totals["goals_for"] - totals["goals_against"],
+        "goal_difference_per_game": round(_safe_average(totals["goals_for"] - totals["goals_against"], games), 2),
+        "goals_for_per_game": round(_safe_average(totals["goals_for"], games), 2),
+        "goals_against_per_game": round(_safe_average(totals["goals_against"], games), 2),
+        "wins": totals["wins"],
+        "draws": totals["draws"],
+        "losses": totals["losses"],
+        "win_rate": round(_safe_average(totals["wins"], games), 2),
+        "home_points_per_game": round(_safe_average(totals["home_points"], totals["home_matches"]), 2),
+        "home_goals_for_per_game": round(_safe_average(totals["home_goals_for"], totals["home_matches"]), 2),
+        "home_goals_against_per_game": round(_safe_average(totals["home_goals_against"], totals["home_matches"]), 2),
+        "away_points_per_game": round(_safe_average(totals["away_points"], totals["away_matches"]), 2),
+        "away_goals_for_per_game": round(_safe_average(totals["away_goals_for"], totals["away_matches"]), 2),
+        "away_goals_against_per_game": round(_safe_average(totals["away_goals_against"], totals["away_matches"]), 2),
+        "last_results": "".join(entry["result"] for entry in entries[:5]),
+        "sample_matches": entries[:5],
+    }
 
 
 @mcp.tool()
